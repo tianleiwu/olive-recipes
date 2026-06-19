@@ -26,6 +26,7 @@
                 "MatMul"
             ],
             "extra_options": {
+                "int4_block_size": 32,
                 "qmoe_block_size": 0,
                 "disable_qk_norm_fusion": 0,
                 "last_matmul_weight_int8": 0,
