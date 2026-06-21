@@ -33,9 +33,26 @@ ORT_HOME="${ORT_HOME:-${HOME}/ort_home_cu130}"
 GENAI_DIR="${GENAI_DIR:-${HOME}/onnxruntime-genai}"
 OLIVE_RECIPES="${OLIVE_RECIPES:-${HOME}/olive-recipes}"
 EVALS_DIR="${EVALS_DIR:-${HOME}/evals}"
+
+# ---- Shared, PERSISTENT model store ----
+# Models are expensive and deterministic, so they are built ONCE here and reused
+# across every experiment run (see REUSE_BUILDS). Keep this OUTSIDE the per-run
+# RUN_DIR so the models survive reruns and are shared between experiments.
 VARIANTS_DIR="${VARIANTS_DIR:-${SCRIPT_DIR}/variants}"
-BENCHMARK_LOG="${BENCHMARK_LOG:-${SCRIPT_DIR}/benchmark_results_v2.txt}"
-RESULTS_TSV="${RESULTS_TSV:-${SCRIPT_DIR}/experiment_results_v2.tsv}"
+
+# ---- Per-experiment working directory (RUN_DIR) ----
+# ALL intermediate + final artifacts of a single run land here so that a rerun
+# (e.g. after pulling new evals or rebuilding ONNX Runtime) NEVER overwrites a
+# previous experiment's results:
+#   benchmark_results_v2.txt, experiment_results_v2.tsv,
+#   bench_<variant>.{json,log}, summary_<variant>.json, and the MMLU shards.
+# Override RUN_DIR to resume/inspect a specific run; otherwise a fresh
+# timestamped directory is created under runs/. A runs/latest symlink always
+# points at the most recent run.
+RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
+RUN_DIR="${RUN_DIR:-${SCRIPT_DIR}/runs/run_${RUN_TAG}}"
+BENCHMARK_LOG="${BENCHMARK_LOG:-${RUN_DIR}/benchmark_results_v2.txt}"
+RESULTS_TSV="${RESULTS_TSV:-${RUN_DIR}/experiment_results_v2.tsv}"
 EXPERIMENTS_MD="${EXPERIMENTS_MD:-${OLIVE_RECIPES}/gpt-oss-20b/gpt_oss_20b_experiments.md}"
 
 # Multi-GPU MMLU runner (proven shard pipeline). Override via MMLU_RUNNER.
@@ -65,7 +82,8 @@ RUN_MMLU="${RUN_MMLU:-1}"
 MMLU_MAX_SAMPLES="${MMLU_MAX_SAMPLES:-0}"          # 0 = full 14042-sample set
 MMLU_PARALLEL_PER_GPU="${MMLU_PARALLEL_PER_GPU:-2}"
 MMLU_GPUS="${MMLU_GPUS:-}"                         # empty = all detected GPUs
-EVAL_RUNS_DIR="${EVAL_RUNS_DIR:-${HOME}/eval_runs}"
+# MMLU shard outputs live under the per-run RUN_DIR so they are never clobbered.
+EVAL_RUNS_DIR="${EVAL_RUNS_DIR:-${RUN_DIR}/mmlu}"
 
 # ---- Per-model summary JSON knobs ----
 GEN_SUMMARY_JSON="${GEN_SUMMARY_JSON:-1}"          # 1 = emit summary_<variant>.json per model
@@ -290,7 +308,7 @@ build_variants() {
         local dest="$VARIANTS_DIR/$variant"
         
         if [ "$REUSE_BUILDS" = "1" ] && [ -f "$dest/genai_config.json" ]; then
-            log_info "Reusing existing build: $variant ($dest)"
+            log_info "Model already exists -> skipping build: $variant ($dest)"
             # Ensure CUDA graph stays enabled for decode benchmarking.
             sed -i 's/"enable_cuda_graph": "0"/"enable_cuda_graph": "1"/' "$dest/genai_config.json"
             continue
@@ -376,8 +394,8 @@ run_benchmarks() {
         log_info "Benchmarking: $variant"
         echo "---------- $variant ----------" | tee -a "$BENCHMARK_LOG"
         
-        local csv="$SCRIPT_DIR/bench_${variant}.csv"
-        local log_file="$SCRIPT_DIR/bench_${variant}.log"
+        local csv="$RUN_DIR/bench_${variant}.csv"
+        local log_file="$RUN_DIR/bench_${variant}.log"
         
         ( cd "$GENAI_DIR/benchmark/python" && \
           ORT_ENABLE_XQA="$XQA" "$VPY" benchmark_e2e.py \
@@ -627,7 +645,7 @@ generate_model_summaries() {
     for i in "${!VARIANT_NAMES[@]}"; do
         local variant="${VARIANT_NAMES[$i]}"
         local recipe="$SCRIPT_DIR/${CONFIGS[$i]}"
-        local bench_json="$SCRIPT_DIR/bench_${variant}.json"
+        local bench_json="$RUN_DIR/bench_${variant}.json"
 
         if [ ! -f "$bench_json" ]; then
             log_warn "No benchmark JSON for $variant ($bench_json); skipping summary"
@@ -641,6 +659,8 @@ generate_model_summaries() {
             --variant "$variant" \
             --bench-json "$bench_json" \
             --recipe "$recipe" \
+            --model-dir "$VARIANTS_DIR/$variant" \
+            --output "$RUN_DIR/summary_${variant}.json" \
             --ort-dir "$ORT_DIR" \
             --genai-dir "$GENAI_DIR" \
             --evals-dir "$EVALS_DIR" \
@@ -656,6 +676,22 @@ generate_model_summaries() {
 }
 
 # ============================================================================
+# Run directory initialisation
+# ============================================================================
+# Create the per-experiment RUN_DIR and a runs/latest convenience symlink. All
+# intermediate + final artifacts are written here, keeping previous experiment
+# results intact across reruns. The shared model store (VARIANTS_DIR) lives
+# outside RUN_DIR and is reused (built once) across experiments.
+
+init_run_dir() {
+    mkdir -p "$RUN_DIR"
+    mkdir -p "$VARIANTS_DIR"
+    ln -sfn "$RUN_DIR" "$SCRIPT_DIR/runs/latest" 2>/dev/null || true
+    log_info "Run directory (intermediate + results): $RUN_DIR"
+    log_info "Shared model store (built once, reused):  $VARIANTS_DIR"
+}
+
+# ============================================================================
 # Main Execution
 # ============================================================================
 
@@ -664,6 +700,7 @@ main() {
     log_info "Script directory: $SCRIPT_DIR"
     echo ""
     
+    init_run_dir
     step_venv_preparation
     install_ort_from_source
     setup_environment
