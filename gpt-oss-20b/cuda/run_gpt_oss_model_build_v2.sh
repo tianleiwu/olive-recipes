@@ -67,6 +67,10 @@ MMLU_PARALLEL_PER_GPU="${MMLU_PARALLEL_PER_GPU:-2}"
 MMLU_GPUS="${MMLU_GPUS:-}"                         # empty = all detected GPUs
 EVAL_RUNS_DIR="${EVAL_RUNS_DIR:-${HOME}/eval_runs}"
 
+# ---- Per-model summary JSON knobs ----
+GEN_SUMMARY_JSON="${GEN_SUMMARY_JSON:-1}"          # 1 = emit summary_<variant>.json per model
+SUMMARY_SCRIPT="${SUMMARY_SCRIPT:-${SCRIPT_DIR}/generate_model_summary.py}"
+
 # Color output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -605,6 +609,53 @@ PYEOF
 }
 
 # ============================================================================
+# Step 7: Emit a consolidated per-model summary JSON (provenance + results)
+# ============================================================================
+# For every variant, build summary_<variant>.json: benchmark backbone + repo
+# git versions + embedded Olive recipe + provider_options + MMLU options/score +
+# test-time env vars. Non-fatal: a failure here never aborts the pipeline.
+# ============================================================================
+
+generate_model_summaries() {
+    [ "$GEN_SUMMARY_JSON" = "1" ] || { log_warn "GEN_SUMMARY_JSON=0 -> skipping per-model summary JSON"; return 0; }
+    if [ ! -f "$SUMMARY_SCRIPT" ]; then
+        log_warn "Summary script not found ($SUMMARY_SCRIPT); skipping per-model summaries"
+        return 0
+    fi
+    log_info "===== Step 6: Generating per-model summary JSON ====="
+
+    for i in "${!VARIANT_NAMES[@]}"; do
+        local variant="${VARIANT_NAMES[$i]}"
+        local recipe="$SCRIPT_DIR/${CONFIGS[$i]}"
+        local bench_json="$SCRIPT_DIR/bench_${variant}.json"
+
+        if [ ! -f "$bench_json" ]; then
+            log_warn "No benchmark JSON for $variant ($bench_json); skipping summary"
+            continue
+        fi
+
+        local eval_opt=()
+        [ -n "${MMLU_OUTDIR:-}" ] && eval_opt=(--eval-dir "$MMLU_OUTDIR/$variant")
+
+        "$VPY" "$SUMMARY_SCRIPT" \
+            --variant "$variant" \
+            --bench-json "$bench_json" \
+            --recipe "$recipe" \
+            --ort-dir "$ORT_DIR" \
+            --genai-dir "$GENAI_DIR" \
+            --evals-dir "$EVALS_DIR" \
+            --results-tsv "$RESULTS_TSV" \
+            --mmlu-max-samples "$MMLU_MAX_SAMPLES" \
+            "${eval_opt[@]}" \
+            --env-set "ORT_ENABLE_XQA=$XQA" \
+            || log_warn "Summary generation failed for $variant"
+    done
+
+    log_info "Per-model summary JSON generation complete"
+    echo ""
+}
+
+# ============================================================================
 # Main Execution
 # ============================================================================
 
@@ -621,6 +672,7 @@ main() {
     run_benchmarks
     run_mmlu
     generate_summary
+    generate_model_summaries
     
     log_info "All steps completed successfully!"
     echo ""

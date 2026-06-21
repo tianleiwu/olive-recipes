@@ -1,0 +1,157 @@
+{
+  "model": "cuda_int4_int4_qmoe_rtn_mixed_matmul_only_qknorm_bs0",
+  "generated_at": "2026-06-21T11:06:52",
+  "git_versions": {
+    "onnxruntime": {
+      "path": "/home/tianlei/onnxruntime",
+      "branch": "tlwu/20260619/qmoe_router_bias_gemv",
+      "commit": "4f64dc597ab583de3a67e0b8e2d358e568867266",
+      "describe": "4f64dc597a",
+      "dirty": true
+    },
+    "onnxruntime_genai": {
+      "path": "/home/tianlei/onnxruntime-genai",
+      "branch": "tlwu/update_model_builder_gpt_oss",
+      "commit": "be79bb5da0dac91fdca53100b9970b6c156308e9",
+      "describe": "v0.12.2-101-gbe79bb5da0",
+      "dirty": false
+    },
+    "evals": {
+      "path": "/home/tianlei/evals",
+      "branch": "main",
+      "commit": "6efa81a8569185cc6d35b2363a46be44a34c9426",
+      "describe": "3.0.1-8-g6efa81a",
+      "dirty": false
+    }
+  },
+  "olive_recipe": {
+    "path": "/home/tianlei/olive-recipes/gpt-oss-20b/cuda/gpt-oss-20b_cuda_int4_int4_qmoe_rtn_mixed_matmul_only_qknorm_bs0.json",
+    "content": {
+      "input_model": {
+        "type": "HfModel",
+        "model_path": "openai/gpt-oss-20b",
+        "load_kwargs": {
+          "torch_dtype": "float16"
+        }
+      },
+      "systems": {
+        "local_system": {
+          "type": "LocalSystem",
+          "accelerators": [
+            {
+              "device": "gpu",
+              "execution_providers": [
+                "CUDAExecutionProvider"
+              ]
+            }
+          ]
+        }
+      },
+      "passes": {
+        "m": {
+          "type": "ModelBuilder",
+          "precision": "int4",
+          "int4_algo_config": "rtn",
+          "int4_op_types_to_quantize": [
+            "MatMul"
+          ],
+          "extra_options": {
+            "int4_block_size": 32,
+            "qmoe_block_size": 0,
+            "disable_qk_norm_fusion": 0,
+            "last_matmul_weight_int8": 1,
+            "int8_mixed_layers": 1,
+            "use_8bits_moe": 0
+          }
+        }
+      },
+      "target": "local_system",
+      "log_severity_level": 0,
+      "output_dir": "model",
+      "cache_dir": "cache",
+      "no_artifacts": true
+    }
+  },
+  "provider_options": {
+    "provider_options": [
+      {
+        "cuda": {
+          "enable_cuda_graph": "1",
+          "enable_skip_layer_norm_strict_mode": "0"
+        }
+      }
+    ],
+    "search": {
+      "diversity_penalty": 0.0,
+      "do_sample": true,
+      "early_stopping": true,
+      "length_penalty": 1.0,
+      "max_length": 131072,
+      "min_length": 0,
+      "no_repeat_ngram_size": 0,
+      "num_beams": 1,
+      "num_return_sequences": 1,
+      "past_present_share_buffer": true,
+      "repetition_penalty": 1.0,
+      "temperature": 1.0,
+      "top_k": 50,
+      "top_p": 1.0
+    }
+  },
+  "mmlu": {
+    "completion_fn": "oss/gpt-oss-20b",
+    "class": "evals.completion_fns.ort_genai:ORTGenAICompletionFn",
+    "args": {
+      "model_path": "/tianlei/models/gptoss20b_int4_qmoe_bs32_ropefix",
+      "execution_provider": "cuda",
+      "max_new_tokens": 2048,
+      "do_sample": false,
+      "model_name": "gpt-oss-20b"
+    },
+    "source": "evals/registry/completion_fns/ort_genai.yaml",
+    "eval": "match_mmlu",
+    "max_samples": "full",
+    "evals_commit": "6efa81a8569185cc6d35b2363a46be44a34c9426",
+    "sample_count": 14042,
+    "score": 0.7933
+  },
+  "environment_variables": {
+    "ORT_ENABLE_XQA": "1",
+    "CUDA_VISIBLE_DEVICES": null
+  },
+  "benchmark": [
+    {
+      "config": {
+        "backend": "onnxruntime-genai",
+        "batch_size": 1.0,
+        "precision": "int4",
+        "warmup_runs": 1,
+        "measured_runs": 10,
+        "model_info": {
+          "full_name": "gpt-oss-20b"
+        },
+        "prompt_length": 512.0,
+        "tokens_generated": 128.0,
+        "max_length": 640.0
+      },
+      "metadata": {
+        "device": "cuda",
+        "package_name": "onnxruntime-genai-cuda",
+        "package_version": "0.15.0.dev0"
+      },
+      "metrics": {
+        "tokenization_throughput_tps": 7641313.303569939,
+        "tokenization_latency_ms": 0.06700418889522552,
+        "prompt_processing_throughput_tps": 28608.831772647645,
+        "prompt_processing_latency_ms": 0.03495424098218791,
+        "token_generation_throughput_tps": 362.9330412384404,
+        "token_generation_latency_ms": 2.7553291830021562,
+        "sampling_throughput_tps": 18273.84380786407,
+        "sampling_latency_ms": 0.05472302436828613,
+        "wall_clock_throughput_tps": 1737.709054262185,
+        "wall_clock_time_s": 0.3683010101318359
+      },
+      "trigger_date": "2026-06-21 04:14:13"
+    }
+  ]
+}
