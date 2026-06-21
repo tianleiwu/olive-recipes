@@ -1,0 +1,263 @@
+===== gpt-oss-20b CUDA decode benchmark Sun Jun 21 04:13:24 PDT 2026 =====
+batch=1 prompt_len=512 gen_len=128 reps=5 warmup=2 cuda_graph=1 XQA=1 EP=cuda
+
+---------- cuda_int4_int4_qmoe_rtn_matmul_only_qknorm_bs0 ----------
+Sun Jun 21 04:13:24 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.105.08             Driver Version: 580.105.08     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H200                    On  |   00000001:00:00.0 Off |                    0 |
+| N/A   34C    P0             80W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H200                    On  |   00000002:00:00.0 Off |                    0 |
+| N/A   34C    P0             78W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H200                    On  |   00000003:00:00.0 Off |                    0 |
+| N/A   33C    P0             76W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H200                    On  |   00000008:00:00.0 Off |                    0 |
+| N/A   32C    P0             76W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   4  NVIDIA H200                    On  |   00000009:00:00.0 Off |                    0 |
+| N/A   33C    P0             78W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   5  NVIDIA H200                    On  |   0000000A:00:00.0 Off |                    0 |
+| N/A   33C    P0             79W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   6  NVIDIA H200                    On  |   0000000B:00:00.0 Off |                    0 |
+| N/A   37C    P0             77W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   7  NVIDIA H200                    On  |   0000000C:00:00.0 Off |                    0 |
+| N/A   33C    P0             77W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+
+Args: batch_size = 1, prompt_length = 512, tokens = 128, max_length = 640
+  0%|          | 0/2 [00:00<?, ?it/s] 50%|█████     | 1/2 [00:04<00:04,  4.07s/it]100%|██████████| 2/2 [00:04<00:00,  1.88s/it]100%|██████████| 2/2 [00:04<00:00,  2.21s/it]
+  0%|          | 0/5 [00:00<?, ?it/s] 20%|██        | 1/5 [00:00<00:01,  2.91it/s] 40%|████      | 2/5 [00:00<00:01,  2.91it/s] 60%|██████    | 3/5 [00:01<00:00,  2.92it/s] 80%|████████  | 4/5 [00:01<00:00,  2.92it/s]100%|██████████| 5/5 [00:01<00:00,  2.92it/s]100%|██████████| 5/5 [00:01<00:00,  2.92it/s]
+Average Tokenization Latency (per token): 0.00010346120689064264 ms
+Average Tokenization Throughput (per token): 9665458.484908154 tps
+Average Prompt Processing Latency (per token): 0.03376971362740733 ms
+Average Prompt Processing Throughput (per token): 29612.33284455232 tps
+Average Token Generation Latency (per token): 2.5585572667947907 ms
+Average Token Generation Throughput (per token): 390.8452677522989 tps
+Average Sampling Latency (per token): 0.052778422832489014 ms
+Average Sampling Throughput (per token): 18947.136847454756 tps
+Average Wall Clock Time: 0.3426477909088135 s
+Average Wall Clock Throughput: 1867.8071681201027 tps
+Results saved in /home/tianlei/olive-recipes/gpt-oss-20b/cuda/bench_cuda_int4_int4_qmoe_rtn_matmul_only_qknorm_bs0.csv!
+
+---------- cuda_int4_int4_qmoe_rtn_last_matmul_only_qknorm_bs0 ----------
+Sun Jun 21 04:13:36 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.105.08             Driver Version: 580.105.08     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H200                    On  |   00000001:00:00.0 Off |                    0 |
+| N/A   39C    P0            169W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H200                    On  |   00000002:00:00.0 Off |                    0 |
+| N/A   34C    P0             78W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H200                    On  |   00000003:00:00.0 Off |                    0 |
+| N/A   33C    P0             76W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H200                    On  |   00000008:00:00.0 Off |                    0 |
+| N/A   32C    P0             76W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   4  NVIDIA H200                    On  |   00000009:00:00.0 Off |                    0 |
+| N/A   33C    P0             78W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   5  NVIDIA H200                    On  |   0000000A:00:00.0 Off |                    0 |
+| N/A   33C    P0             79W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   6  NVIDIA H200                    On  |   0000000B:00:00.0 Off |                    0 |
+| N/A   37C    P0             77W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   7  NVIDIA H200                    On  |   0000000C:00:00.0 Off |                    0 |
+| N/A   33C    P0             77W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+
+Args: batch_size = 1, prompt_length = 512, tokens = 128, max_length = 640
+  0%|          | 0/2 [00:00<?, ?it/s] 50%|█████     | 1/2 [00:04<00:04,  4.13s/it]100%|██████████| 2/2 [00:04<00:00,  1.91s/it]100%|██████████| 2/2 [00:04<00:00,  2.25s/it]
+  0%|          | 0/5 [00:00<?, ?it/s] 20%|██        | 1/5 [00:00<00:01,  2.76it/s] 40%|████      | 2/5 [00:00<00:01,  2.76it/s] 60%|██████    | 3/5 [00:01<00:00,  2.76it/s] 80%|████████  | 4/5 [00:01<00:00,  2.76it/s]100%|██████████| 5/5 [00:01<00:00,  2.76it/s]100%|██████████| 5/5 [00:01<00:00,  2.76it/s]
+Average Tokenization Latency (per token): 0.00014464676496572793 ms
+Average Tokenization Throughput (per token): 6913393.467437287 tps
+Average Prompt Processing Latency (per token): 0.03455803889664821 ms
+Average Prompt Processing Throughput (per token): 28936.827202222696 tps
+Average Token Generation Latency (per token): 2.704509506075401 ms
+Average Token Generation Throughput (per token): 369.7528138664713 tps
+Average Sampling Latency (per token): 0.05624145269393921 ms
+Average Sampling Throughput (per token): 17780.479559123545 tps
+Average Wall Clock Time: 0.36165685653686525 s
+Average Wall Clock Throughput: 1769.6332543739898 tps
+Results saved in /home/tianlei/olive-recipes/gpt-oss-20b/cuda/bench_cuda_int4_int4_qmoe_rtn_last_matmul_only_qknorm_bs0.csv!
+
+---------- cuda_int4_int4_qmoe_rtn_matmul_only_qknorm_bs64 ----------
+Sun Jun 21 04:13:49 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.105.08             Driver Version: 580.105.08     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H200                    On  |   00000001:00:00.0 Off |                    0 |
+| N/A   41C    P0            167W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H200                    On  |   00000002:00:00.0 Off |                    0 |
+| N/A   34C    P0             78W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H200                    On  |   00000003:00:00.0 Off |                    0 |
+| N/A   33C    P0             76W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H200                    On  |   00000008:00:00.0 Off |                    0 |
+| N/A   32C    P0             76W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   4  NVIDIA H200                    On  |   00000009:00:00.0 Off |                    0 |
+| N/A   33C    P0             77W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   5  NVIDIA H200                    On  |   0000000A:00:00.0 Off |                    0 |
+| N/A   33C    P0             79W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   6  NVIDIA H200                    On  |   0000000B:00:00.0 Off |                    0 |
+| N/A   37C    P0             77W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   7  NVIDIA H200                    On  |   0000000C:00:00.0 Off |                    0 |
+| N/A   33C    P0             77W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+
+Args: batch_size = 1, prompt_length = 512, tokens = 128, max_length = 640
+  0%|          | 0/2 [00:00<?, ?it/s] 50%|█████     | 1/2 [00:04<00:04,  4.11s/it]100%|██████████| 2/2 [00:04<00:00,  1.89s/it]100%|██████████| 2/2 [00:04<00:00,  2.23s/it]
+  0%|          | 0/5 [00:00<?, ?it/s] 20%|██        | 1/5 [00:00<00:01,  2.90it/s] 40%|████      | 2/5 [00:00<00:01,  2.91it/s] 60%|██████    | 3/5 [00:01<00:00,  2.92it/s] 80%|████████  | 4/5 [00:01<00:00,  2.92it/s]100%|██████████| 5/5 [00:01<00:00,  2.91it/s]100%|██████████| 5/5 [00:01<00:00,  2.91it/s]
+Average Tokenization Latency (per token): 0.00016538106137886643 ms
+Average Tokenization Throughput (per token): 6046641.566225836 tps
+Average Prompt Processing Latency (per token): 0.03416763647692278 ms
+Average Prompt Processing Throughput (per token): 29267.46193508034 tps
+Average Token Generation Latency (per token): 2.5581540085199315 ms
+Average Token Generation Throughput (per token): 390.9068792064513 tps
+Average Sampling Latency (per token): 0.05548298358917236 ms
+Average Sampling Throughput (per token): 18023.544072621797 tps
+Average Wall Clock Time: 0.34287104606628416 s
+Average Wall Clock Throughput: 1866.590974486293 tps
+Results saved in /home/tianlei/olive-recipes/gpt-oss-20b/cuda/bench_cuda_int4_int4_qmoe_rtn_matmul_only_qknorm_bs64.csv!
+
+---------- cuda_int4_int4_qmoe_rtn_mixed_matmul_only_qknorm_bs0 ----------
+Sun Jun 21 04:14:01 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.105.08             Driver Version: 580.105.08     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H200                    On  |   00000001:00:00.0 Off |                    0 |
+| N/A   41C    P0            162W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H200                    On  |   00000002:00:00.0 Off |                    0 |
+| N/A   34C    P0             78W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H200                    On  |   00000003:00:00.0 Off |                    0 |
+| N/A   33C    P0             76W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H200                    On  |   00000008:00:00.0 Off |                    0 |
+| N/A   32C    P0             76W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   4  NVIDIA H200                    On  |   00000009:00:00.0 Off |                    0 |
+| N/A   33C    P0             78W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   5  NVIDIA H200                    On  |   0000000A:00:00.0 Off |                    0 |
+| N/A   33C    P0             79W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   6  NVIDIA H200                    On  |   0000000B:00:00.0 Off |                    0 |
+| N/A   37C    P0             77W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   7  NVIDIA H200                    On  |   0000000C:00:00.0 Off |                    0 |
+| N/A   33C    P0             77W /  700W |       4MiB / 143771MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+
+Args: batch_size = 1, prompt_length = 512, tokens = 128, max_length = 640
+  0%|          | 0/2 [00:00<?, ?it/s] 50%|█████     | 1/2 [00:04<00:04,  4.14s/it]100%|██████████| 2/2 [00:04<00:00,  1.92s/it]100%|██████████| 2/2 [00:04<00:00,  2.25s/it]
+  0%|          | 0/5 [00:00<?, ?it/s] 20%|██        | 1/5 [00:00<00:01,  2.71it/s] 40%|████      | 2/5 [00:00<00:01,  2.71it/s] 60%|██████    | 3/5 [00:01<00:00,  2.71it/s] 80%|████████  | 4/5 [00:01<00:00,  2.71it/s]100%|██████████| 5/5 [00:01<00:00,  2.71it/s]100%|██████████| 5/5 [00:01<00:00,  2.71it/s]
+Average Tokenization Latency (per token): 0.00013086755643598735 ms
+Average Tokenization Throughput (per token): 7641313.303569939 tps
+Average Prompt Processing Latency (per token): 0.03495424098218791 ms
+Average Prompt Processing Throughput (per token): 28608.831772647645 tps
+Average Token Generation Latency (per token): 2.7553291830021562 ms
+Average Token Generation Throughput (per token): 362.9330412384404 tps
+Average Sampling Latency (per token): 0.05472302436828613 ms
+Average Sampling Throughput (per token): 18273.84380786407 tps
+Average Wall Clock Time: 0.3683010101318359 s
+Average Wall Clock Throughput: 1737.709054262185 tps
+Results saved in /home/tianlei/olive-recipes/gpt-oss-20b/cuda/bench_cuda_int4_int4_qmoe_rtn_mixed_matmul_only_qknorm_bs0.csv!
+

@@ -1,0 +1,4 @@
+cuda_int4_int4_qmoe_rtn_matmul_only_qknorm_bs0	29612.33284455232	390.8452677522989	0.7634
+cuda_int4_int4_qmoe_rtn_last_matmul_only_qknorm_bs0	28936.827202222696	369.7528138664713	0.7598
+cuda_int4_int4_qmoe_rtn_matmul_only_qknorm_bs64	29267.46193508034	390.9068792064513	0.7470
+cuda_int4_int4_qmoe_rtn_mixed_matmul_only_qknorm_bs0	28608.831772647645	362.9330412384404	0.7933
