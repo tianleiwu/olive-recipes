@@ -342,22 +342,62 @@ chat-completions API, configured with `max_tokens: 768, temperature: 0.0, top_p:
 
 ### 5.3 MMLU Evaluation (14,042 samples, 8-GPU sharding)
 
-**Status**: full MMLU evaluations in progress for llama.cpp and vLLM (estimated 2–3 hours each). Smoke
-(100-sample) tests validate adapter and configuration:
+**Finalized llama.cpp result**:
+- **llama.cpp** (reasoning=on, mt=768): **0.8252** full MMLU (11587/14042)
+  from `/tmp/llama_mmlu_full_reasoning_on_chatadapter_mt768_final_20260619_021049/summary_report.md`.
 
-| Engine | Test Type | Samples | Accuracy | Notes |
+**vLLM status**:
+- Full vLLM MMLU was blocked in the original environment by startup failures.
+- Root causes identified and fixed in an isolated environment (see §5.4); smoke validation now passes.
+
+**Smoke tests** validate adapter and configuration:
+
+| Engine | Test Type | Samples | Accuracy | Config |
 |--------|-----------|--------:|----------:|---|
-| llama.cpp | Smoke | 100 | 0.82 | mt=384 (faster), reasoning on |
+| llama.cpp | Smoke | 100 | 0.82 | mt=384, reasoning on |
 | vLLM | Smoke | 100 | 0.91 | bfloat16, mt=768 |
 
-Expected accuracy is in the range of 0.75–0.82 for llama.cpp (lower than ORT 0.8010 due to
-MXFP4 quantization) and 0.75–0.80 for vLLM (native fp16 without quantization, but subject to
-initialization and sampling variance).
+**Observed outcomes (smoke, 100 samples):**
+- llama.cpp mt=768: **0.93**
+- vLLM mt=768: **0.91** (after environment fix)
+- ORT mt=768 (pre-fix): **0.91**
+- ORT mt=768 (after ORT letter-extraction patch): **0.93**
+- ORT mt=2048: **0.94**
+
+These numbers show strong mt sensitivity on ORT and indicate that comparing ORT at `max_new_tokens=2048`
+versus llama/vLLM at `max_tokens=768` is not apples-to-apples.
 
 **Completion function parity**: both llama.cpp (port 8081) and vLLM (port 8000) registered in
 `~/.evals/completion_fns/gpt_oss_local.yaml` with identical adapter (`OpenAIChatToCompletionLetterFn`)
-and generation parameters. This ensures any accuracy differences reflect model/quantization effects, not
-evaluation harness differences.
+and generation parameters (`max_tokens: 768, temperature: 0.0, top_p: 1.0`). This ensures any accuracy
+differences reflect model/quantization effects, not evaluation harness differences.
+
+### 5.4 Why ORT can look lower (80 vs 82) and how to close the gap
+
+The apparent ORT gap is not explained by one factor; the evidence points to two contributors:
+
+1. **Token-budget mismatch (`mt`)**
+   - ORT completion fn (`oss/gpt-oss-20b`) defaults to `max_new_tokens: 2048`.
+   - llama/vLLM evals were configured with `max_tokens: 768`.
+   - At matched `mt=768` (100-sample smoke), ORT=0.91 and llama=0.93 (gap ≈2 points).
+   - At `mt=2048`, ORT improves to 0.94 on the same smoke set.
+
+2. **Answer-format extraction mismatch in ORT path (now fixed)**
+   - ORT completion fn previously extracted the `final` channel text but did not enforce A/B/C/D output.
+   - In mt=768 smoke before the patch, **5/100** ORT samples returned non-letter free-form text.
+   - After adding the same letter fallback chain used by `OpenAIChatToCompletionLetterFn`, ORT mt=768
+     improved from **0.91 → 0.93** on a fresh 100-sample rerun, with **0/100 non-letter outputs**.
+   - Example misses: `match_mmlu_shard_2.local.1`, `match_mmlu_shard_5.local.0`, where ORT produced
+     reasoning text and no single-letter answer while llama produced correct letters.
+
+**Practical gap-closing plan**:
+- **For fair engine comparison**: run all engines with the same token budget (`mt=768` or `mt=2048`).
+- **For ORT eval quality**: keep the added A/B/C/D letter-extraction fallback in
+  `evals/completion_fns/ort_genai.py` enabled (`extract_letter_choice=true`).
+- **For best ORT full accuracy**: keep higher `max_new_tokens` (>=2048) when reasoning is enabled,
+  or verify that lowering to 768 does not truncate final-answer emission for the chosen model variant.
+- **For model-side uplift**: use top ORT quantization variants (`k_quant_mixed` / `rtn_mixed_lmh8_bs64`)
+  and keep `enable_skip_layer_norm_strict_mode=0` for throughput while validating accuracy deltas.
 
 ---
 
