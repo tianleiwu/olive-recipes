@@ -1,0 +1,35 @@
+[
+    {
+        "config": {
+            "backend": "onnxruntime-genai",
+            "batch_size": 1.0,
+            "precision": "int4",
+            "warmup_runs": 1,
+            "measured_runs": 10,
+            "model_info": {
+                "full_name": "gpt-oss-20b"
+            },
+            "prompt_length": 512.0,
+            "tokens_generated": 128.0,
+            "max_length": 640.0
+        },
+        "metadata": {
+            "device": "cuda",
+            "package_name": "onnxruntime-genai-cuda",
+            "package_version": "0.15.0.dev0"
+        },
+        "metrics": {
+            "tokenization_throughput_tps": 6913393.467437287,
+            "tokenization_latency_ms": 0.0740591436624527,
+            "prompt_processing_throughput_tps": 28936.827202222696,
+            "prompt_processing_latency_ms": 0.03455803889664821,
+            "token_generation_throughput_tps": 369.7528138664713,
+            "token_generation_latency_ms": 2.704509506075401,
+            "sampling_throughput_tps": 17780.479559123545,
+            "sampling_latency_ms": 0.05624145269393921,
+            "wall_clock_throughput_tps": 1769.6332543739898,
+            "wall_clock_time_s": 0.36165685653686525
+        },
+        "trigger_date": "2026-06-21 04:13:48"
+    }
+]

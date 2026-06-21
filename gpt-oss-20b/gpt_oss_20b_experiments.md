@@ -414,3 +414,18 @@ For fair llama.cpp and vLLM comparison (§5):
    `OpenAIChatToCompletionLetterFn` with `max_tokens: 768, temperature: 0.0, top_p: 1.0`
 4. **Sharding**: 8 GPUs × 1756–1755 samples/shard (14,042 total), parallel launch
 5. **Adapter**: uses chat-completions API with fallback extraction from `content` and `reasoning_content` fields
+
+## Experiment (2026-06-21): rtn qk-norm-fusion variants (v2 build script)
+
+- **Generated:** 2026-06-21T06:49:56
+- **Build:** Olive recipes via `cuda/run_gpt_oss_model_build_v2.sh`, onnxruntime-genai **built from source** (patched model builder).
+- **Decode TPS:** `benchmark_e2e.py`, batch 1, prompt 512, gen 128, CUDA graph=1, **XQA=1**.
+- **MMLU:** `match_mmlu`, full (14042) samples, multi-GPU shard pooled accuracy.
+
+| Model (variant) | Size (GiB) | Prefill TPS | Decode TPS | MMLU | Notes |
+|---|---:|---:|---:|---:|---|
+| `cuda_int4_int4_qmoe_rtn_matmul_only_qknorm_bs0` | 10.68 | 29612.3 | 390.8 | 0.7634 | rtn int4 body (blk32), int4 lm_head, FP16 embed, QMoE per-channel, qk-norm fusion |
+| `cuda_int4_int4_qmoe_rtn_last_matmul_only_qknorm_bs0` | 10.95 | 28936.8 | 369.8 | 0.7598 | rtn int4 body (blk32), int8 lm_head, FP16 embed, QMoE per-channel, qk-norm fusion |
+| `cuda_int4_int4_qmoe_rtn_matmul_only_qknorm_bs64` | 10.65 | 29267.5 | 390.9 | 0.7470 | rtn int4 body (blk64), int4 lm_head, FP16 embed, QMoE per-channel, qk-norm fusion |
+| `cuda_int4_int4_qmoe_rtn_mixed_matmul_only_qknorm_bs0` | 11.04 | 28608.8 | 362.9 | 0.7933 | rtn int4 body + mixed int8 layers, int8 lm_head, FP16 embed, QMoE per-channel, qk-norm fusion |
+
