@@ -469,3 +469,108 @@ For fair llama.cpp and vLLM comparison (§5):
 | `cuda_int4_int4_qmoe_rtn_matmul_only_qknorm_bs64` | 10.65 | 29267.5 | 390.9 | 0.7470 | rtn int4 body (blk64), int4 lm_head, FP16 embed, QMoE per-channel, qk-norm fusion |
 | `cuda_int4_int4_qmoe_rtn_mixed_matmul_only_qknorm_bs0` | 11.04 | 28608.8 | 362.9 | 0.7933 | rtn int4 body + mixed int8 layers, int8 lm_head, FP16 embed, QMoE per-channel, qk-norm fusion |
 
+
+## Experiment (2026-06-21): rtn qk-norm-fusion variants (v2 build script)
+
+- **Generated:** 2026-06-21T16:29:50
+- **Build:** Olive recipes via `cuda/run_gpt_oss_model_build_v2.sh`, onnxruntime-genai **built from source** (patched model builder).
+- **Decode TPS:** `benchmark_e2e.py`, batch 1, prompt 512, gen 128, CUDA graph=1, **XQA=1**.
+- **MMLU:** `match_mmlu`, full (14042) samples, multi-GPU shard pooled accuracy.
+
+| Model (variant) | Size (GiB) | Prefill TPS | Decode TPS | MMLU | Notes |
+|---|---:|---:|---:|---:|---|
+| `cuda_int4_int4_qmoe_rtn_mixed_lmh4_qknorm_qmoe0` | 10.77 | 29403.1 | 382.0 | 0.8017 | A: rtn int4 body (blk32) + mixed int8 layers, int4 lm_head, FP16 embed, QMoE per-channel, qk-norm fusion |
+| `cuda_int4_int4_qmoe_rtn_matmul_only_lmh4_qknorm_qmoe64` | 11.23 | 25487.3 | 385.8 | 0.7901 | B: rtn int4 body (blk32), int4 lm_head, FP16 embed, QMoE block64, qk-norm fusion |
+| `cuda_int4_int4_qmoe_rtn_mixed_lmh4_qknorm_qmoe64` | 11.31 | 25442.9 | 377.7 | 0.8087 | C: rtn int4 body (blk32) + mixed int8 layers, int4 lm_head, FP16 embed, QMoE block64, qk-norm fusion |
+| `cuda_int4_int4_qmoe_kquant_mixed_lmh4_qknorm_qmoe64` | 11.33 | 25664.2 | 363.7 | 0.8156 | E: k_quant int4 body (blk32) + mixed int8 layers, int4 lm_head, FP16 embed, QMoE block64, qk-norm fusion |
+
+
+## Experiment (2026-06-21): rtn qk-norm-fusion variants (v2 build script)
+
+- **Generated:** 2026-06-21T21:40:54
+- **Build:** Olive recipes via `cuda/run_gpt_oss_model_build_v2.sh`, onnxruntime-genai **built from source** (patched model builder).
+- **Decode TPS:** `benchmark_e2e.py`, batch 1, prompt 512, gen 128, CUDA graph=1, **XQA=1**.
+- **MMLU:** `match_mmlu`, full (14042) samples, multi-GPU shard pooled accuracy.
+
+| Model (variant) | Size (GiB) | Prefill TPS | Decode TPS | MMLU | Notes |
+|---|---:|---:|---:|---:|---|
+| `cuda_int4_int4_qmoe_kquant_mixed_lmh4_qknorm_qmoe0` | 10.79 | 29018.5 | 366.7 | 0.8128 | F: k_quant int4 body (blk32) + mixed int8 layers, int4 lm_head, FP16 embed, QMoE per-channel, qk-norm fusion |
+| `cuda_int4_int4_qmoe_kquant_matmul_only_lmh4_qknorm_qmoe64` | 11.25 | 25037.2 | 369.0 | 0.8101 | H: k_quant int4 body (blk32), int4 lm_head, FP16 embed, QMoE block64, qk-norm fusion |
+| `cuda_int4_int4_qmoe_rtn_mixed_lmh4_qknorm_qmoe32` | 11.87 | 24421.5 | 374.7 | 0.8091 | G: rtn int4 body (blk32) + mixed int8 layers, int4 lm_head, FP16 embed, QMoE block32, qk-norm fusion |
+
+
+## Experiment (2026-06-22): rtn qk-norm-fusion variants (v2 build script)
+
+- **Generated:** 2026-06-22T00:30:04
+- **Build:** Olive recipes via `cuda/run_gpt_oss_model_build_v2.sh`, onnxruntime-genai **built from source** (patched model builder).
+- **Decode TPS:** `benchmark_e2e.py`, batch 1, prompt 512, gen 128, CUDA graph=1, **XQA=1**.
+- **MMLU:** `match_mmlu`, full (14042) samples, multi-GPU shard pooled accuracy.
+
+| Model (variant) | Size (GiB) | Prefill TPS | Decode TPS | MMLU | Notes |
+|---|---:|---:|---:|---:|---|
+| `cuda_int4_int4_qmoe_kquant_mixed_lmh8_qknorm_qmoe0` | 11.06 | 28371.4 | 348.9 | 0.8093 | I: k_quant int4 body (blk32) + mixed int8 layers, int8 lm_head, FP16 embed, QMoE per-channel, qk-norm fusion (= F + int8 lm_head) |
+| `cuda_int4_int4_qmoe_kquant_mixed_lmh8_qknorm_qmoe64` | 11.61 | 24491.7 | 345.5 | 0.8170 | J: k_quant int4 body (blk32) + mixed int8 layers, int8 lm_head, FP16 embed, QMoE block64, qk-norm fusion (= E + int8 lm_head) |
+
+
+## 8. Consolidated v2 sweep (A–J) — summary & recommendation
+
+This section consolidates the qk-norm-fusion v2 builds (variants **A–J**) measured with the
+**same harness** (Olive ModelBuilder built from source, `benchmark_e2e.py` batch 1 / prompt 512 /
+gen 128 / CUDA graph=1 / **XQA=1**) and the **same evals commit (`db01e45`)** on the **full
+14042-sample MMLU**. All ten are therefore directly comparable. (There is no variant "D" — the
+letter was skipped.) Every variant shares: int4 body `block_size=32`, **FP16 embedding**,
+qk-norm fusion on, `use_8bits_moe=0` (4-bit QMoE experts).
+
+### 8.1 All variants, sorted by MMLU
+
+| Var | Body algo | Mixed int8 layers | lm_head | QMoE blk | Size (GiB) | Prefill TPS | Decode TPS | MMLU |
+|---|---|:--:|:--:|:--:|---:|---:|---:|---:|
+| **J** | k_quant | yes | **int8** | 64 | 11.61 | 24491.7 | 345.5 | **0.8170** |
+| **E** | k_quant | yes | int4 | 64 | 11.33 | 25664.2 | 363.7 | 0.8156 |
+| **F** | k_quant | yes | int4 | per-ch (0) | 10.79 | 29018.5 | 366.7 | 0.8128 |
+| **H** | k_quant | no  | int4 | 64 | 11.25 | 25037.2 | 369.0 | 0.8101 |
+| **I** | k_quant | yes | **int8** | per-ch (0) | 11.06 | 28371.4 | 348.9 | 0.8093 |
+| **G** | rtn | yes | int4 | 32 | 11.87 | 24421.5 | 374.7 | 0.8091 |
+| **C** | rtn | yes | int4 | 64 | 11.31 | 25442.9 | 377.7 | 0.8087 |
+| **A** | rtn | yes | int4 | per-ch (0) | 10.77 | 29403.1 | **382.0** | 0.8017 |
+| **B** | rtn | no  | int4 | 64 | 11.23 | 25487.3 | 385.8 | 0.7901 |
+
+> Decode leader overall is **B** (385.8) but at the lowest accuracy (0.7901); **A** is within ~1%
+> (382.0) while scoring +0.0116 higher and being the smallest + best prefill — so A is the
+> best *useful* speed point (see §8.3).
+
+### 8.2 Isolated levers (each holds all other axes fixed)
+
+| Lever | Comparison | Δ MMLU | Δ Decode | Δ Size | Δ Prefill |
+|---|---|---:|---:|---:|---:|
+| **k_quant vs rtn** (body) | F vs A / E vs C / H vs B | +0.011 / +0.007 / +0.020 | −15 / −14 / −17 | ~0 | ~0 |
+| **mixed int8 layers** | C vs B / E vs H | +0.019 / +0.0055 | −8 / −5 | +0.08 GiB | ~0 |
+| **QMoE 64 vs per-channel(0)** | C vs A | +0.007 | −4 | +0.54 GiB | **−13%** (29.4k→25.4k) |
+| **QMoE 32 vs 64** | G vs C | −0.0004 (tie) | −3 | +0.56 GiB | −4% | 
+| **int8 vs int4 lm_head** | I vs F / J vs E | −0.0035 / +0.0014 | −18 / −18 | +0.27 GiB | −2% to −5% |
+
+Takeaways:
+- **k_quant** is the cheapest accuracy gain (+0.007–0.020 MMLU, no size cost), paid for in ~15 decode tps.
+- **mixed int8 layers** reliably add accuracy for ~+0.08 GiB and a few decode tps — always worth it.
+- **QMoE per-channel (0)** is the best size/prefill point; **block 64** buys ~+0.007 MMLU at −13% prefill
+  and +0.54 GiB. **block 32 is strictly dominated** by 64 (no accuracy gain, bigger, slower).
+- **int8 lm_head is not worth it**: accuracy change is within noise (−0.0035 to +0.0014) while costing
+  ~+0.28 GiB and ~18 decode tps. Keep the int4 lm_head.
+
+### 8.3 Recommendation — three-model lineup
+
+A clean Pareto spread covering speed → balance → accuracy, all int4 lm_head except J:
+
+| Role | Variant | Config | Size (GiB) | Prefill | Decode | MMLU |
+|---|---|---|---:|---:|---:|---:|
+| **Speed** | **A** `…rtn_mixed_lmh4_qknorm_qmoe0` | rtn, mixed, per-channel MoE, int4 lmh | **10.77** | **29403** | **382.0** | 0.8017 |
+| **All-rounder** | **F** `…kquant_mixed_lmh4_qknorm_qmoe0` | k_quant, mixed, per-channel MoE, int4 lmh | 10.79 | 29018 | 366.7 | 0.8128 |
+| **Accuracy** | **J** `…kquant_mixed_lmh8_qknorm_qmoe64` | k_quant, mixed, block-64 MoE, **int8 lmh** | 11.61 | 24492 | 345.5 | **0.8170** |
+
+- **A (speed)** = the rtn twin of F; swapping k_quant→rtn (symmetric, no zero-points) is the decode lever.
+  A leads decode **and** prefill **and** is the smallest, costing ~0.011 MMLU vs F.
+- **F (all-rounder)** = best balance: near-top accuracy with the best size/prefill of the high-accuracy tier.
+- **J (accuracy)** = the highest MMLU measured (0.8170), trading decode/prefill/size for the top score.
+  (If the +0.28 GiB / ~18 decode of the int8 lm_head is unwanted, **E** at 0.8156 is the int4-lmh
+  alternative — statistically indistinguishable accuracy, faster and smaller.)
+
