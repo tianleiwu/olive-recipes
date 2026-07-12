@@ -546,7 +546,7 @@ qk-norm fusion on, `use_8bits_moe=0` (4-bit QMoE experts).
 | **k_quant vs rtn** (body) | F vs A / E vs C / H vs B | +0.011 / +0.007 / +0.020 | −15 / −14 / −17 | ~0 | ~0 |
 | **mixed int8 layers** | C vs B / E vs H | +0.019 / +0.0055 | −8 / −5 | +0.08 GiB | ~0 |
 | **QMoE 64 vs per-channel(0)** | C vs A | +0.007 | −4 | +0.54 GiB | **−13%** (29.4k→25.4k) |
-| **QMoE 32 vs 64** | G vs C | −0.0004 (tie) | −3 | +0.56 GiB | −4% | 
+| **QMoE 32 vs 64** | G vs C | −0.0004 (tie) | −3 | +0.56 GiB | −4% |
 | **int8 vs int4 lm_head** | I vs F / J vs E | −0.0035 / +0.0014 | −18 / −18 | +0.27 GiB | −2% to −5% |
 
 Takeaways:
@@ -574,3 +574,433 @@ A clean Pareto spread covering speed → balance → accuracy, all int4 lm_head 
   (If the +0.28 GiB / ~18 decode of the int8 lm_head is unwanted, **E** at 0.8156 is the int4-lmh
   alternative — statistically indistinguishable accuracy, faster and smaller.)
 
+---
+
+## 9. Cross-build / cross-engine summary table (2026-06-26)
+
+Requested side-by-side of the Foundry baseline (old released package vs. current source build,
+CUDA graph on/off), the three recommended ORT variants (**A / F / J**), and llama.cpp.
+
+- **Throughput** (Prefill = `pp512`, Decode = `tg128`): re-measured **fresh on 2026-06-26**,
+  batch 1, prompt 512, gen 128, 5 reps / 2 warmup, GPU0 pinned. ORT rows via
+  `benchmark_e2e.py`; llama.cpp via `llama-bench -ngl 99`.
+- **MMLU**: **reused** from the full 14042-sample evals already recorded above (not re-run — it is
+  expensive and runtime/library changes do not change accuracy for the same weights). Foundry =
+  0.7929 (§3/§4), A/F/J = §8, llama.cpp = 0.8252 (§5.3, reasoning on, mt=768).
+- **Builds**: source-build ORT rows use the current tree (onnxruntime `5f49a37`, genai
+  `0.15.0.dev0`, provider lib built 2026-06-24, CUDA 13.0) with `ORT_ENABLE_XQA=1`. The baseline
+  row uses the released wheel `onnxruntime-genai-cuda==0.13.1` with **onnxruntime-gpu 1.26.0**
+  force-pinned (built for **CUDA 12.8**) in an isolated venv — no source lib synced. **ORT 1.27.0
+  produces incorrect (gibberish) output on `foundry_cuda_v1`** (see §9.2), so it is *not* used as the
+  baseline; ORT 1.26.0 is verified correct.
+
+| Model | Size (GiB) | Prefill TPS | Decode TPS | MMLU | Comment |
+|---|---:|---:|---:|---:|---|
+| `foundry_cuda_v1` — **cg off, released pkg** (genai 0.13.1 / ORT 1.26.0, CUDA 12.8) | 11.04 | 29650.4 | **256.3** | 0.7929 | Baseline. `onnxruntime-genai-cuda==0.13.1` with **onnxruntime-gpu 1.26.0** force-pinned (the wheel's default dep is 1.27.0, which gives wrong output here — see §9.2). Output verified correct ("Paris") before benchmarking. No XQA / MoE-GEMV decode opts. CUDA-12.8 runtime via `LD_LIBRARY_PATH`. |
+| `foundry_cuda_v1` — cg on, source build | 11.04 | 27987.1 | 366.8 | 0.7929 | Current source build (genai 0.15.0.dev0 / ORT 1.28, lib 06-24), XQA=1. +73% decode vs released baseline; +41% vs the old §4 number (260.0). |
+| `foundry_cuda_v1` — cg off, source build | 11.04 | 30048.9 | 313.2 | 0.7929 | Same build, CUDA graph off. cg costs ~17% prefill but adds ~17% decode. |
+| **A** `…rtn_mixed_lmh4_qknorm_qmoe0` | 10.77 | 29029.7 | 426.8 | 0.8017 | cg=1, XQA=1, source build. Decode leader. (§8 recorded 382.0 — see analysis below.) |
+| **F** `…kquant_mixed_lmh4_qknorm_qmoe0` | 10.79 | 29656.9 | 409.2 | 0.8128 | cg=1, XQA=1. All-rounder. (§8 recorded 366.7.) |
+| **J** `…kquant_mixed_lmh8_qknorm_qmoe64` | 11.61 | 24562.7 | 383.4 | 0.8170 | cg=1, XQA=1. Top MMLU. (§8 recorded 345.5.) |
+| **llama.cpp** (MXFP4) | 11.28 | 11097.0 | 352.6 | 0.8252 | `llama-bench` build `039e20a2d` (9588), `-ngl 99`, pp512/tg128. Decode now 352.6 (was ~297 in §5.2 with older build). MMLU 0.8252 was with reasoning on, mt=768. |
+
+### 9.1 Why the fresh ORT decode numbers are higher than the recorded values
+
+The settings are **identical** to the recorded runs (batch 1, prompt 512, gen 128, CUDA graph on,
+`ORT_ENABLE_XQA=1`). The difference is the **build**: the CUDA provider lib I measured was rebuilt
+**2026-06-24**, which includes decode-path commits that landed **after** the §8 runs
+(2026-06-21 → 06-22 00:30):
+
+| Commit | Date | Effect |
+|---|---|---|
+| `6be94ded19` Enable XQA by default for FP16/BF16 GQA | 06-22 05:45 | XQA decode path on by default |
+| `1472c16ea5` Enable CUDA GQA QK-Norm and XQA decode | 06-22 19:34 | fused qk-norm + XQA decode kernel |
+| `669b8834fc` Sliding-window support to XQA decode | 06-23 21:21 | keeps XQA path active for GQA |
+| `ba45260eed` Fuse MoE router bias into MatMulNBits GEMV | 06-24 02:07 | removes 24 router Add kernels (~+0.2%, see `qmoe_gemv_experiments.md`) |
+
+Net effect: a uniform **~+11–12% decode** on A/F/J (382→427, 367→409, 345→383) with **prefill
+essentially unchanged** (29403→29030, 29018→29657, 24492→24563) — confirming the gain is in the
+**decode kernel** (XQA + GEMV), not prefill. The XQA-decode enablement (`1472c16ea5` /
+`669b8834fc`) is the dominant driver; the router-bias GEMV fusion is small (~0.2%).
+
+For Foundry the gap is larger (260.0 → 366.8, **+41%**) because its §4 number predates *all* of the
+above — it was measured with the original `genai 0.14.0-dev0` study build (before qk-norm fusion and
+XQA). The released-wheel baseline (`0.13.1` / **ORT 1.26.0**, verified-correct) sits lower at
+**256.3** (cg off), giving the Foundry-weights ladder: **256.3 (0.13.1 / ORT 1.26.0, cg off) → 313.2
+(06-24 source, cg off) → 366.8 (06-24 source, cg on)**.
+
+> Note: the baseline used `onnxruntime-genai-cuda==0.13.1` with **onnxruntime-gpu 1.26.0**
+> force-pinned (the wheel otherwise pulls 1.27.0). It is built for CUDA 12.8, so it was run with
+> `LD_LIBRARY_PATH` pointed at `cuda12.8/lib64` + `cudnn9.12/lib` in a dedicated Python 3.12 venv.
+
+### 9.2 ORT 1.27.0 correctness on `foundry_cuda_v1`
+
+Before benchmarking the released wheels, a quick greedy-decode sanity prompt
+("capital of France?") was run on each runtime against `foundry_cuda_v1`:
+
+| Runtime | Output | Verdict |
+|---|---|---|
+| genai 0.13.1 + **ORT 1.26.0** | `" Paris\n\nSure! Here's a short…"` | ✅ correct |
+| genai 0.13.2 + **ORT 1.27.0** | `" pulling us L tabletamar gainingser irault…"` | ❌ gibberish |
+
+**ORT 1.27.0 produces incorrect output specifically on `foundry_cuda_v1`**, so its throughput
+(measured earlier at decode 212.2) is meaningless and is excluded. ORT 1.27.0 is expected to work
+correctly on other models — the released 0.13.x wheels could not load the **A/F/J** variants for an
+independent check (their tokenizer uses a newer `TokenizersBackend` class unsupported by the 0.13.x
+runtime, `RuntimeError: Unsupported tokenizer class`), and the A/F/J throughput rows above come from
+the current source build (ORT 1.28-dev), not 1.27.0. The baseline therefore uses the
+verified-correct **ORT 1.26.0**.
+
+---
+
+## 11. GPT-OSS-20B QMoE per-channel storage fix and 16-bucket experiment (2026-07-02 to 2026-07-03)
+
+This section records the rc1 rebuild/debug session for
+`gpt-oss-20b/cuda/gpt-oss-20b_cuda_int4_int4_qmoe_rtn_mixed_matmul_only_qknorm_bs0.json`.
+The key issue was wrong output from the newly rebuilt model compared with the archived known-good model:
+
+- Archived known-good model:
+  `gpt-oss-20b/cuda/variants/cuda_int4_int4_qmoe_rtn_mixed_matmul_only_qknorm_bs0`
+- Rebuilt/fixed models:
+  - `gpt-oss-20b/cuda/model_qmoe_unsigned_offset` — unsigned-offset, legacy 15-bucket range
+  - `gpt-oss-20b/cuda/model_qmoe_trtllm_signed` — TRT-LLM-style signed/two's-complement storage experiment
+  - `gpt-oss-20b/cuda/model_qmoe_unsigned_full_range` — unsigned-offset, full 16-bucket range
+- Repro script added under the dev repo:
+  `/home/tianlei/dev/scripts/h200_18/run_gpt_oss_rc1.sh`
+
+### 11.1 Reproduction commands
+
+Use the source-build ORT/genai CUDA 13.0 environment:
+
+```bash
+export CUDA_HOME=/home/tianlei/cuda13.0
+export CUDA_PATH=/home/tianlei/cuda13.0
+export CUDNN_HOME=/home/tianlei/cudnn_9.19_cuda13
+export ORT_BUILD_DIR=/home/tianlei/onnxruntime/build/cu130_bench/Release
+export VENV=/home/tianlei/onnxruntime/.venv_cu130
+export ORT_ENABLE_XQA=1
+export CUDA_VISIBLE_DEVICES_BENCH=0
+export MMLU_GPUS="0..7"
+export MMLU_PARALLEL=1
+export MMLU_MAX_SAMPLES=800
+
+# Rebuild genai, rebuild the Olive model, run the capital-of-France sanity check,
+# benchmark, and run MMLU. By default this now emits 16-bucket unsigned-offset QMoE.
+/home/tianlei/dev/scripts/h200_18/run_gpt_oss_rc1.sh --all
+
+```
+
+For MMLU stability during this session, export `ORT_FORCE_DETERMINISTIC_MOE=1`. Without it, the
+non-deterministic/fused MoE path can hit a CUDA illegal-memory-access failure during eval (see
+§11.5).
+
+### 11.2 Root cause and code changes
+
+Two issues were found in the rebuilt QMoE model path:
+
+1. **Initializer shape bookkeeping:** GPT-OSS QMoE initializer shape metadata must follow the actual
+   stacked qweight tensor shapes, especially for per-channel QMoE (`qmoe_block_size <= 0`) and
+   CUDA-prepacked weights.
+2. **QMoE storage contract:** ORT CUDA QMoE prepack/runtime decodes raw int4 as `nibble - 8` and raw
+   int8 as `byte - 128`. Therefore the exported QMoE storage must be unsigned offset (`q + 8` /
+   `q + 128`) even though numeric quantization is symmetric. A TRT-LLM-style signed/two's-complement
+   byte/nibble encoding is not compatible with this runtime path.
+
+The helper quantizer was added/updated in onnxruntime-genai and mirrored in ORT test tooling:
+
+- GenAI helper: `/home/tianlei/onnxruntime-genai/src/python/py/models/builders/qmoe_quantizer.py`
+- GenAI builder call sites: `/home/tianlei/onnxruntime-genai/src/python/py/models/builders/base.py`
+- GPT-OSS shape fix: `/home/tianlei/onnxruntime-genai/src/python/py/models/builders/gptoss.py`
+- GenAI focused tests: `/home/tianlei/onnxruntime-genai/test/python/builder/test_qmoe_weights.py`
+- ORT helper: `/home/tianlei/onnxruntime/onnxruntime/python/tools/quantization/qmoe_quantizer.py`
+- ORT CUDA smoke: `/home/tianlei/onnxruntime/onnxruntime/test/python/transformers/test_qmoe_cuda.py`
+
+Final supported QMoE per-channel modes:
+
+| Mode | Numeric range | Scale | Stored value | Status |
+|---|---|---|---|---|
+| unsigned full range | int4 `[-8, 7]`, int8 `[-128, 127]` | `/8`, `/128` | `q + 8`, `q + 128` | default |
+| unsigned legacy range | int4 `[-7, 7]`, int8 `[-127, 127]` | `/7`, `/127` | `q + 8`, `q + 128` | env-var testing only |
+| TRT-LLM signed storage | int4 `[-8, 7]`, int8 `[-128, 127]` | `/8`, `/128` | two's-complement signed bits | removed; broken |
+
+### 11.3 Validation
+
+Focused validation run after the cleanup:
+
+```bash
+cd /home/tianlei/onnxruntime-genai
+/home/tianlei/onnxruntime/.venv_cu130/bin/python -m pytest test/python/builder/test_qmoe_weights.py -q
+# 32 passed, 2 warnings
+
+cd /tmp
+export CUDA_HOME=/home/tianlei/cuda13.0 CUDA_PATH=/home/tianlei/cuda13.0
+export CUDNN_HOME=/home/tianlei/cudnn_9.19_cuda13 ORT_ENABLE_XQA=1 ORT_FORCE_DETERMINISTIC_MOE=1
+export CUDA_VISIBLE_DEVICES=4
+export PYTHONPATH=/home/tianlei/onnxruntime/build/cu130_bench/Release:/home/tianlei/onnxruntime/onnxruntime/test/python/transformers
+export LD_LIBRARY_PATH=/home/tianlei/onnxruntime/build/cu130_bench/Release:/home/tianlei/onnxruntime/build/cu130_bench/Release/onnxruntime/capi:/home/tianlei/cuda13.0/lib64:/home/tianlei/cudnn_9.19_cuda13/lib64:/home/tianlei/cudnn_9.19_cuda13/lib:${LD_LIBRARY_PATH:-}
+/home/tianlei/onnxruntime/.venv_cu130/bin/python -m pytest /home/tianlei/onnxruntime/onnxruntime/test/python/transformers/test_qmoe_cuda.py::TestQMoEIntPrePackSmoke -q
+# 5 passed, 2 subtests passed
+
+bash -n /home/tianlei/dev/scripts/h200_18/run_gpt_oss_rc1.sh
+```
+
+### 11.4 MMLU storage-mode experiment
+
+All MMLU rows here are capped at 800 samples (`MMLU_MAX_SAMPLES=800`). Artifacts are under
+`/tmp/gpt_oss_qmoe_storage_mmlu_800`.
+
+| Model / run | QMoE storage | Env | MMLU result | Artifact |
+|---|---|---|---:|---|
+| `model_qmoe_unsigned_offset` | unsigned offset, 15-bucket | `ORT_FORCE_DETERMINISTIC_MOE=1` | **0.8488** (679/800) | `/tmp/gpt_oss_qmoe_storage_mmlu_800/unsigned_offset_deterministic_moe/mmlu.summary` |
+| `model_qmoe_unsigned_full_range` | unsigned offset, 16-bucket | `ORT_FORCE_DETERMINISTIC_MOE=1`, 8 GPUs | **0.8525** (682/800) | `/tmp/gpt_oss_qmoe_storage_mmlu_800/unsigned_full_range_mmlu_8gpu/mmlu.summary` |
+| `model_qmoe_trtllm_signed` | TRT-LLM signed/two's-complement | `ORT_FORCE_DETERMINISTIC_MOE=1` | failed / invalid | `/tmp/gpt_oss_qmoe_storage_mmlu_800/trtllm_signed_deterministic_moe/mmlu.log` |
+
+Conclusion: the 16-bucket unsigned-offset mode slightly improves the 800-sample score over the
+legacy 15-bucket unsigned-offset mode and keeps the ORT CUDA QMoE storage contract. The signed
+storage mode is empirically broken and was removed from the code and docs.
+
+### 11.5 QMoE profiler cross-stream race (RESOLVED 2026-07-03)
+
+**Symptom.** The MMLU runner (and a minimal genai repro) crashed intermittently unless
+`ORT_FORCE_DETERMINISTIC_MOE=1` was set. Disabling CUDA graph alone also avoided it. The visible
+failure usually surfaced later as a downstream launch failure + CUDA 700 (illegal memory access),
+e.g. `/lm_head/MatMul_Q8` cuBLAS launch failure, or inside the MoE grouped GEMM itself:
+
+```text
+moe_gemm_template_dispatch.h:194 ... occupancy > 0 was false. GPU lacks the shared memory resources
+moe_kernels.cu:344 ... cudaFuncSetAttribute(...) CUDA failure 700: an illegal memory access
+```
+
+The crashing layer varied run-to-run (layers 0/1/7…) — a classic non-deterministic race signature.
+
+**Isolation.** Reproduced deterministically (≈100% crash) with an 8×H200 (sm_90) build, CUDA 13.0,
+`ORT_ENABLE_XQA=1`, `enable_cuda_graph=1`, model `model_qmoe_unsigned_full_range` (INT4 per-channel,
+`block_size=-1`). Key facts:
+
+- `ORT_FORCE_DETERMINISTIC_MOE=1` (profiler never runs) → always clean.
+- `enable_cuda_graph=0` → always clean.
+- `CUDA_LAUNCH_BLOCKING=1` and `compute-sanitizer` (both serialize launches) → always clean, 0
+  memcheck errors → confirms a pure concurrency/timing bug, not a static OOB.
+- Draining the compute stream *before* profiling did **not** help (the hazard is with *subsequent*
+  reuse of the scratch block, not prior writes).
+
+**Root cause.** The MoE GEMM profiler (`MoeGemmProfiler::runProfiling`) allocated scratch from the
+per-node **temp allocator** but ran its grouped-GEMM/routing kernels on a **private side stream**.
+The temp arena is stream-aware and tracks liveness on the compute stream; the profiler's side-stream
+usage is invisible to it, so the arena could hand the same scratch block to a later compute-stream
+allocation (the real MoE workspace) while the profiler's kernels were still in flight. The
+overlapping access corrupted the profiler's routing/GEMM buffers and left a sticky CUDA 700 that
+surfaced at the next MoE (or `lm_head`) kernel launch. This only manifested with CUDA graph enabled
+(which changes the warmup/allocation ordering) and on SM90 (the INT4 mixed-input non-TMA tactics).
+
+A second, independent latent bug was found and fixed in `runProfiler`: its workspace layout was keyed
+on the per-tactic `tactic.is_tma_warp_specialized`, whereas `getWorkspaceSize` and every
+`prepare*` helper key it on `mSM >= 90`. On SM90 with a non-TMA (Ampere-fallback) INT4 tactic these
+diverge, shifting all sub-buffer offsets so the profiler reads `expert_first_token_offset` and the
+GEMM inputs from wrong, random-filled locations.
+
+**Fix (onnxruntime `tlwu/20260701/qmoe_fp4`).**
+
+1. `moe_gemm_profiler.{h,cc}`: `profileTactics`/`runProfiling` take an optional `timing_stream`; when
+   provided the profiler runs on it (the ORT compute stream) so all profiler kernels are strictly
+   ordered with the surrounding compute-stream work and share its temp-allocator stream context. A
+   private stream is created only when no stream is supplied.
+2. `moe_quantization.cc`: pass the compute stream (`Stream(context)`) into `profileTactics`; skip
+   profiling entirely while the compute stream is being captured into a CUDA graph
+   (`isCapturing`), with a capture-safe fallback to `tactics[0]` when no tuned config is cached.
+3. `moe_kernels.cu`: key `runProfiler`'s `getProfilerWorkspaces` layout on `mSM >= 90` to match
+   `getWorkspaceSize`/`prepare*`.
+
+**Verification.** Minimal genai repro (`/tmp/qmoe_repro/gen.py`, long prefill, 3 iters, GPU0),
+CUDA-graph on: **15/15** clean runs after the fix (was ≈100% crash before). Controls still pass:
+`ORT_FORCE_DETERMINISTIC_MOE=1` 3/3, `enable_cuda_graph=0` 3/3. `lintrunner` clean on all four files.
+
+
+---
+
+## 10. MoE GEMV FP32 accumulation: `ORT_MOE_GEMV_FP32_ACCUM` (2026-06-27)
+
+Effect of accumulating the int4 QMoE GEMV (decode-path MoE expert mat-vec) in **FP32** vs **FP16**,
+toggled by the env var `ORT_MOE_GEMV_FP32_ACCUM` (`0` = FP16 accum, `1` = FP32 accum), on the two
+recommended variants **F** (`…kquant_mixed_lmh4_qknorm_qmoe0`) and **J** (`…kquant_mixed_lmh8_qknorm_qmoe64`).
+
+- **Binary**: fresh source build at `onnxruntime/build/cu130_bench/Release` (onnxruntime `c3a5222d2a`,
+  ORT 1.28-dev, CUDA 13.0), provider lib synced into the `.venv_cu130` genai package.
+- **Throughput**: `benchmark_e2e.py`, batch 1, prompt 512, gen 128, 5 reps / 2 warmup, GPU0 pinned,
+  `enable_cuda_graph=1`, `ORT_ENABLE_XQA=1`.
+- **MMLU**: full **14,042**-sample `match_mmlu`, 8-GPU sharded (`run_evals_parallel.sh`), reasoning
+  medium, `max_new_tokens=2048`, with the env var exported to all workers.
+- **Correctness**: a greedy sanity prompt ("capital of France?") returned " Paris" for all four
+  setups before benchmarking.
+
+| Model | FP32_ACCUM | Size (GiB) | Prefill TPS | Decode TPS | MMLU | Comment |
+|---|:---:|---:|---:|---:|---:|---|
+| **F** `…kquant_mixed_lmh4_qknorm_qmoe0` | 0 (FP16) | 10.79 | 29157.8 | **410.6** | 0.8051 | Decode leader; FP16 MoE-GEMV accum. |
+| **F** `…kquant_mixed_lmh4_qknorm_qmoe0` | 1 (FP32) | 10.79 | 29015.2 | 374.7 | 0.8059 | +0.0008 MMLU for −8.8% decode. |
+| **J** `…kquant_mixed_lmh8_qknorm_qmoe64` | 0 (FP16) | 11.61 | 25136.5 | **385.9** | 0.8185 | FP16 MoE-GEMV accum. |
+| **J** `…kquant_mixed_lmh8_qknorm_qmoe64` | 1 (FP32) | 11.61 | 24315.1 | 353.0 | 0.8200 | +0.0015 MMLU for −8.5% decode. |
+
+**Takeaways**
+
+1. **FP32 accumulation barely changes accuracy**: F +0.0008 (0.8051 → 0.8059), J +0.0015
+   (0.8185 → 0.8200) on the full 14,042-sample MMLU — within run-to-run noise.
+2. **FP32 accumulation costs ~9% decode**: F 410.6 → 374.7 (−8.8%), J 385.9 → 353.0 (−8.5%);
+   prefill is essentially unchanged (the GEMV is a decode/mat-vec kernel, not used in prefill GEMMs).
+3. **Recommendation**: keep the default **FP16 accumulation** (`ORT_MOE_GEMV_FP32_ACCUM=0`) — the
+   ~9% decode speedup is free given the negligible accuracy delta. Reserve FP32 accum for cases that
+   demand maximum numerical fidelity.
+
+---
+
+## 12. v2 prepack + block-size sweep on ORT 1.29 / genai 0.15 (2026-07-09)
+
+New model-builder line ("v2") that drives prepacking through recipe `extra_options`
+(`matmulnbits_weights_prepacked`, `qmoe_weights_prepacked`, `qmoe_block_size`) instead of env vars,
+plus the `fuse_qk_norm_gqa` fusion. This section sweeps QMoE block size, the dense MatMulNBits
+prepack mode (SM80 vs SM90 fpA_intB layout), the LM-head bit width, and the int4 algo, and measures
+full-MMLU accuracy + throughput.
+
+### Stack / method
+- **ORT**: 1.29.0, source build `~/git/onnxruntime/build/cu130_bench/Release`
+  (wheel `onnxruntime_gpu-1.29.0`), CUDA 13.0, 8×H200 (sm_90).
+- **onnxruntime-genai**: 0.15.0-dev built from source, branch `tlwu/update_model_builder_gpt_oss`
+  (HEAD `7fc783726c`). Clean-reinstall the wheel after every build (a stale
+  `site-packages/onnxruntime_genai/models/builders/` is NOT overwritten by `pip --force-reinstall`;
+  `pip uninstall` + `rm -rf` the package dir first, then reinstall, and verify from a neutral cwd).
+- **venv**: `~/git/onnxruntime/.venv_cu130` (python 3.14).
+- **Recipes**: `gpt-oss-20b_v2_rc{0..10}_*.json` in `gpt-oss-20b/cuda/`. Models in
+  `~/gpt_oss_rc_models/v2_rc{0..10}/`. Runner `~/git/dev/scripts/h200_18/run_gpt_oss_rc1.sh`.
+- **Benchmark**: `benchmark_e2e.py`, batch 1, prompt 512, gen 128 (reps 5–10 / warmup 2–3), GPU0,
+  `enable_cuda_graph=1`, `ORT_ENABLE_XQA=1`. **Model size** = `model.onnx` + `model.onnx.data`.
+- **MMLU**: full **14,042**-sample `match_mmlu`, multi-GPU sharded (`run_evals_parallel.sh`).
+  RC9/RC10 sharded on 6 GPUs (another user occupied GPU 1/2); all others on 8 GPUs.
+- **Common v2 extra_options**: `fuse_qk_norm_gqa=1`, `qmoe_weights_prepacked=1`,
+  `int8_mixed_layers=1`, `use_8bits_moe=0`, `int4_algo_config=default` (except rc5/rc7 `k_quant`).
+
+### How the dense-weight prepack works (current ORT)
+`prepack_matmulnbits_weights` (genai `base.py`) repacks eligible **symmetric** MatMulNBits qweights
+into the CUDA fpA_intB layout and stamps `weight_prepacked` on the node:
+- `matmulnbits_weights_prepacked = 0` → raw weights (standard MatMulNBits path).
+- `= 1` → **SM80** layout (`weight_prepacked=1`), eligible `block_size ∈ {32,64,128}`.
+- `= 2` → **SM90** (Hopper native) layout (`weight_prepacked=2`), eligible `block_size ∈ {64,128}` only.
+Eligibility also needs `bits∈{4,8}`, `K%block_size==0`, `N%(32 int8 / 64 int4)==0`, symmetric weights.
+On sm_90, `FpAIntBPackingSmForKernel()` returns 90 only for `weight_prepacked==2`, else 80; the
+kernel `ORT_ENFORCE`s the model's format matches. gpt-oss has 73 MatMulNBits nodes; the 24 MoE
+routers (N=32) are never eligible, so at most **49/73** prepack (24 o_proj + 24 qkv + 1 lm_head).
+fpA_intB now auto-engages (no `ORT_FPA_INTB_GEMM` needed) and supports fused bias.
+
+### 12.1 QMoE block size, LM-head bits, prepack mode, algo (rc0–rc5, dense `int4_block_size=32`)
+
+| rc  | recipe suffix              | QMoE blk | lm_head | prepack | algo    | Size    | Prefill | Decode | MMLU |
+|-----|----------------------------|:--------:|:-------:|:-------:|---------|--------:|--------:|-------:|-----:|
+| rc0 | `default_prepack0`         | 0 (per-ch) | int8 | 0      | default | 11.8 GB | 18675 | 411.9 | 0.8074 |
+| rc1 | `default_prepack1`         | 0        | int8    | 1 (SM80)| default | 11.8 GB | 18158 | 421.4 | 0.8056 |
+| rc2 | `default_prepack2`         | 0        | int8    | 2 (SM90)| default | 11.8 GB | 18550 | 412.5 | 0.8074 |
+| rc3 | `default_prepack0_lm4`     | 0        | int4    | 0      | default | 11.5 GB | 18624 | 436.6 | 0.8054 |
+| rc4 | `default_prepack1_bs64`    | **64**   | int8    | 1 (SM80)| default | 12.4 GB | 15047 | 420.8 | **0.8211** |
+| rc5 | `kquant_prepack0`          | 0        | int8    | 0      | k_quant | 11.9 GB | 18798 | 389.9 | 0.8087 |
+
+- **QMoE block-wise (bs64) is the single biggest accuracy lever**: rc4 0.8211 vs the per-channel
+  (bs0) group ~0.805–0.808 (+~1.3 pts). MoE experts dominate the parameter count, so finer MoE
+  scales matter most. Cost: +0.6 GB and −19% prefill (15047 vs ~18.5k; block-wise dequant is heavier),
+  decode ~unchanged.
+- **Prepack mode is accuracy-neutral** (layout only): rc0=rc2=0.8074 (mode 0 vs 2 on bs32/per-ch MoE
+  are the same weights); rc1 0.8056 is noise. It only shifts prefill/decode.
+- **rc3 `lm_head int4`** (`last_matmul_weight_int8=0`): fastest decode (436.6) + smallest (11.5 GB)
+  but lowest MMLU (0.8054) — the int8 LM head is worth ~1 pt.
+- **rc5 k_quant**: 0.8087, marginally above default per-channel; slowest decode (389.9). k_quant is
+  **asymmetric** (per-block zero-points) so it can NOT be prepacked (fpA_intB is symmetric-only).
+
+### 12.2 LM-head off + k_quant×bs64 (rc6, rc7; dense `int4_block_size=32`)
+
+| rc  | recipe suffix                | vs rc4              | Size    | Prefill | Decode | MMLU |
+|-----|------------------------------|---------------------|--------:|--------:|-------:|-----:|
+| rc6 | `default_prepack1_bs64_lm4`  | rc4 + lm_head int4  | 12.1 GB | 15141 | 431.2 | 0.8190 |
+| rc7 | `kquant_prepack0_bs64`       | k_quant + QMoE bs64 | 12.4 GB | 15160 | 387.3 | 0.8210 |
+
+- **rc6**: −0.3 GB, +2.5% decode (420.8→431.2) for −0.2 pt MMLU (0.8190). Balanced pick.
+- **rc7**: MMLU 0.8210 ≈ rc4 0.8211 → **k_quant body does NOT stack on top of QMoE bs64** (the MoE
+  block-wise gain already captured the accuracy; dense algo is a wash). Worst decode (387, asymmetric)
+  and unprepackable → **dominated by rc4**; drop k_quant for this line.
+
+### 12.3 Dense block size 32 vs 64 × SM80 vs SM90 prepack (rc8, rc9, rc10)
+
+All keep QMoE bs64 and lm_head int8 (= rc4), varying only the dense `int4_block_size` and prepack mode.
+
+| rc   | dense int4_blk | prepack | Prepacked | Size    | Prefill | Decode | MMLU |
+|------|:--------------:|:-------:|:---------:|--------:|--------:|-------:|-----:|
+| rc4  | 32             | 1 (SM80)| 49×wp1    | 12.4 GB | 15047 | 420.8 | **0.8211** |
+| rc8  | 32             | 2 (SM90)| **0**×wp2 | 12.4 GB | 15350 | 407.3 | (not run) |
+| rc9  | 64             | 1 (SM80)| 49×wp1    | 12.4 GB | 15083 | 419.4 | 0.8093 |
+| rc10 | 64             | 2 (SM90)| 49×wp2    | 12.4 GB | 15902 | **460.95** | 0.8089 |
+
+- **rc8 is a no-op prepack trap**: SM90 mode needs block_size 64/128, but the dense weights are
+  bs32 → **0/73 prepacked**, silently falling back to the standard path (decode 407 < rc4's fpA_intB
+  SM80 GEMV 421 in a clean same-GPU A/B). SM90 mode requires `int4_block_size=64` to engage.
+- **rc10 reproduces the SM90 native decode win**: with bs64 the 49 nodes pack as SM90 (`weight_prepacked=2`)
+  → decode **460.95 vs rc9 (SM80) 419.4 = +9.9%**, prefill +5.4%. Matches the earlier v1 SM90 result.
+- **Prepack layout is lossless**: rc9 and rc10 are byte-identical in size and MMLU (0.8093 vs 0.8089,
+  noise); SM80 vs SM90 is purely perf.
+- **bs64 costs ~1.2 MMLU pts vs bs32** on the full eval: rc9/rc10 ~0.809 vs rc4 (bs32) 0.8211. Finer
+  bs32 scales quantize the attention/lm_head weights better. (Earlier MMLU-800 "bs32≈bs64 wash" was
+  small-sample noise.) Because SM90 prepack *requires* bs64, its +10% decode is inseparable from this
+  ~1.2-pt accuracy loss.
+
+### Conclusions / recommendations
+1. **Best accuracy: rc4** (`default`, QMoE bs64, dense bs32, SM80 prepack, int8 lm_head) — **0.8211**,
+   decode 420.8. QMoE block-wise + int8 lm_head + fine dense bs32 is the accuracy recipe.
+2. **Lowest latency: rc10** (dense bs64, SM90 prepack) — decode **461** (+9.6% vs rc4) but **−1.2 pt
+   MMLU** (0.8089); the SM90 native kernel is only reachable at bs64.
+3. **Balanced: rc6** (rc4 + int4 lm_head) — 0.8190, decode 431, 12.1 GB.
+4. **Drop**: rc7 (k_quant no gain, unprepackable, slow), rc8 (SM90 mode with bs32 = 0 prepacked),
+   rc9 (dominated: rc4's speed at rc4-minus-1.2pt accuracy). k_quant can't be prepacked (asymmetric).
+5. To get SM90 decode at bs32 accuracy would require an **ORT-side** change letting the SM90 fpA_intB
+   prepack/kernel accept `block_size=32` — not a recipe knob.
+
+### 12.4 SM90 native `block_size=32` prepack enabled — rc8 rebuilt (2026-07-10)
+
+This delivers the **ORT-side change from conclusion #5**: the native SM90 (Hopper TMA/WGMMA)
+fpA_intB mixed-GEMM kernel now serves `block_size=32` via a multi-scale-per-K-tile
+(`ScaleKPerTile=2`) mainloop (two bs32 scale groups share the 64-element Hopper K-tile). So the
+"SM90 requires bs64" trap from 12.3 is gone: the rc8 recipe (`v2_rc8_default_prepack2_bs64.json`,
+dense `int4_block_size=32`, `matmulnbits_weights_prepacked=2`) now actually prepacks.
+
+**What changed**
+- **ORT** (branch `tlwu/20260710/fpa_intb_sm90_bs32_inmem_autotune`): SM90 mixed-GEMM mainloop +
+  launcher gained the `ScaleKPerTile=2` path; the `MatMulNBits` ctor now allows
+  `weight_prepacked=2` with `block_size ∈ {32,64,128}`. 64/128 kernels are byte-identical
+  (`if constexpr (ScaleKPerTile==1)`-gated), so no perf/accuracy impact on rc9/rc10.
+- **genai** `base.py` `prepack_matmulnbits_weights`: SM90 (`prepack_mode==2`) `allowed_block_sizes`
+  widened from `{64,128}` → `{32,64,128}` (weight byte-layout is block-size-independent; bs32 is a
+  runtime scale-grouping concern). This **supersedes** the "SM90 eligible `{64,128}` only" line in
+  *How the dense-weight prepack works* above.
+
+**Rebuilt model** — `~/gpt_oss_rc_models/v2_rc8_prepack2/` (12.4 GB), same 8×H200 / ORT 1.29 /
+CUDA 13.0 stack (benchmark: batch 1, prompt 512, gen 128, reps 10 / warmup 3, GPU0,
+`enable_cuda_graph=1`, `ORT_ENABLE_XQA=1`):
+
+| rc          | dense int4_blk | prepack  | Prepacked  | Size    | Prefill | Decode | MMLU |
+|-------------|:--------------:|:--------:|:----------:|--------:|--------:|-------:|-----|
+| rc4 (ref)   | 32             | 1 (SM80) | 49×wp1     | 12.4 GB | 15047 | 420.8 | 0.8211 *(full)* |
+| rc10 (ref)  | 64             | 2 (SM90) | 49×wp2     | 12.4 GB | 15902 | 460.95 | 0.8089 *(full)* |
+| rc8 (old)   | 32             | 2 (SM90) | **0**×wp2  | 12.4 GB | 15350 | 407.3 | (fell back, 12.3) |
+| **rc8 (new)** | 32           | 2 (SM90) | **49**×wp2 | 12.4 GB | **15931** | **457.6** | **0.8600** *(800)* |
+
+- **49/73 MatMulNBits now pack as native SM90 bs32** (`weight_prepacked=2`): 24 qkv (N=2880) +
+  24 o_proj/mlp (N=5120, int4) + 12 int8-mixed (N=5120) + 1 lm_head (N=201088, int8). The 24 MoE
+  routers (N=32, `N%64≠0`) remain ineligible — exactly the expected `49/73`.
+- **Generation correct** (m=1 GEMV decode on the SM90 layout): "The capital of France is **Paris**."
+- **MMLU 0.8600 (688/800)** — a **800-sample** run, so *not* directly comparable to the full-eval
+  (14,042) numbers in 12.1–12.3. Prepack is a lossless layout change (established by rc9≡rc10), so
+  this confirms the SM90 bs32 kernel is numerically clean vs the raw bs32 weights (no
+  regression/corruption); it anchors against the earlier rc7_v2 800-sample baseline (0.8612).
+- **The A/B the SM90-bs32 kernel was built for** (all bs32, same weights, layout-only diff): decode
+  **457.6 vs rc4's SM80 bs32 420.8 = +8.8%**, prefill **15931 vs 15047 = +5.9%** — and it lands right
+  on rc10's SM90 numbers (decode 460.95, prefill 15902, ≈noise) **while keeping bs32 accuracy**. So
+  the native SM90 kernel now delivers rc10-class throughput *without* rc10's bs64 −1.2-pt MMLU hit
+  — exactly the goal of conclusion #5.
+
+**Upshot for conclusions #2/#5**: SM90 native decode is no longer locked to bs64. rc8 (new) combines
+rc4's bs32 accuracy with rc10's SM90 decode speedup (decode 457.6 ≈ rc10's 461, +8.8% over rc4;
+accuracy stays at the bs32 tier, not rc10's −1.2-pt bs64 drop) — making it the new **best
+accuracy+latency** candidate. Confirm with a full-MMLU (14,042) pass before promoting over rc4.

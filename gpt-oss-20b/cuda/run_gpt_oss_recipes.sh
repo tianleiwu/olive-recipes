@@ -1,0 +1,1 @@
+/home/tianlei/git/dev/scripts/h200_18/run_gpt_oss_recipes.sh
