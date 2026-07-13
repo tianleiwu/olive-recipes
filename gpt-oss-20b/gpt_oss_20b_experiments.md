@@ -1004,3 +1004,255 @@ CUDA 13.0 stack (benchmark: batch 1, prompt 512, gen 128, reps 10 / warmup 3, GP
 rc4's bs32 accuracy with rc10's SM90 decode speedup (decode 457.6 ≈ rc10's 461, +8.8% over rc4;
 accuracy stays at the bs32 tier, not rc10's −1.2-pt bs64 drop) — making it the new **best
 accuracy+latency** candidate. Confirm with a full-MMLU (14,042) pass before promoting over rc4.
+
+## 13. Quantized KV cache — INT8 / FP8 / INT4, calibration + full range + leaderboard evals (2026-07-12)
+
+Adds **KV-cache quantization** to the gpt-oss-20b CUDA `GroupQueryAttention` node (post-RoPE K and
+raw V), on top of the existing int4-weight `default_prepack` recipe. All four models below share
+**byte-identical int4 weights** (recipe `gpt-oss-20b_rc7_default_prepack.json`, `qmoe_block_size=0`
+per-channel, prepacked; `model.onnx.data` = 11,821,236,224 B for every one) and differ **only in the
+KV-cache element type** — an apples-to-apples isolation of KV quantization. Stack: 8×H200, ORT 1.29
+(build `cu130_bench`, `USE_FPA_INTB_GEMM/USE_FP8_KV_CACHE/USE_INT4_KV_CACHE=ON`), genai `tlwu/quantized_kv_cache`,
+CUDA 13.0 / cuDNN 9.19.
+
+### 13.1 Calibration & scale convention
+
+- Scales calibrated from the FP16-KV baseline's `present.*.key/value` over 24 diverse **512-token**
+  sequences (percentile 99.99, per-channel). Script: `dev/scripts/h200_18/calibrate_kv_scales.py`;
+  orchestrator `run_gpt_oss_quantized_kv.sh`.
+- **Root cause of the earlier INT8 gap:** old scales were calibrated on ~40-token prompts, but eval
+  runs at 512-token context. With RoPE, post-RoPE K amax grows with position, so short-prompt calib
+  under-estimated amax on ~90 % of channels → the deployed model hard-clipped KV at long context.
+  512-token calibration closes it (INT8 MMLU-800 0.7512 → 0.8575).
+- **Use the full signed range (`unsigned_full_range`): `scale = amax / 2^(b-1)`, clamp
+  `[-2^(b-1), 2^(b-1)-1]`.** The ORT GQA kernel (`group_query_attention_qdq.cuh`) clamps INT4 to
+  `[-8,7]` (`kInt4Min/Max`) and INT8 to `[-128,127]` (`kInt8Min/Max`) and dequantizes `q·scale`, so
+  the scale must divide by `2^(b-1)` (8 / 128), not `2^(b-1)-1` (7 / 127). This uses all `2^b` levels.
+  Same convention as the weight quantizer's `unsigned_full_range=True` default (`cuda_quantizer.py`).
+  - **INT4 `/8` vs `/7`: +5.1 pt** (MMLU-800 0.7788 → 0.8300) — the ~12.5 % finer step dominates.
+  - **INT8 `/128` vs `/127`: neutral** (0.8575 → 0.8538, within ±1σ) — 0.4 % finer step is noise.
+  - fp8 is unaffected (symmetric ±448, floating grid).
+- Models tagged `*_percentile_fr` use the full-range convention. Scale JSONs in
+  `~/gpt_oss_kv_scales/kv_scales_<q>_per_channel_percentile_fr.json`.
+
+### 13.2 Models
+
+| tag | KV cache | model dir (`~/gpt_oss_rc_models/`) | cache bytes/elem |
+|-----|----------|------------------------------------|:----------------:|
+| base    | FP16 (baseline)         | `rc7_v2_fp16kv_default`         | 2   |
+| int8-fr | INT8 per-ch, `[-128,127]` | `rc7_v2_int8_kv_percentile_fr` | 1   |
+| fp8     | FP8 E4M3 per-ch         | `rc7_v2_fp8_kv_percentile`      | 1   |
+| int4-fr | INT4 per-ch, `[-8,7]`   | `rc7_v2_int4_kv_percentile_fr`  | 0.5 |
+
+`base` was **freshly rebuilt** from `gpt-oss-20b_rc7_default_prepack.json` with the current model
+builder (not the older `rc7`/`rc7_v2` k-quant/bs64 models, which use different weight quant and are
+**not** comparable). On-disk size is 11.04 GiB for all four — KV quant only changes the runtime cache
+dtype, not stored weights (the memory saving is in the GPU KV cache during inference).
+
+### 13.3 Results — throughput + leaderboard accuracy
+
+Benchmark: `benchmark_e2e.py`, batch 1 / prompt 512 / gen 128, reps 10 / warmup 3, GPU0,
+`enable_cuda_graph=1`, `ORT_ENABLE_XQA=1`. Evals via `run_gpt_oss_rc1_v2.sh` (OpenAI-evals stack,
+`oss/gpt-oss-20b*` completion fns, 8-GPU sharding).
+
+| tag | Prefill tps | Decode tps | GPQA-diamond (198) | MATH (500) | **MMLU-Pro (12,032)** |
+|-----|--------:|-------:|-----:|-----:|-----:|
+| **base** FP16 | 18,157 | 424.3 | 0.5455 | 0.8740 | **0.6841** (8231) |
+| **int8-fr**   | 18,998 | 351.8 | 0.5859 | 0.8620 | **0.6828** (8215) |
+| **fp8**       | 19,007 | 349.7 | 0.5404 | 0.8680 | **0.5636 ⚠︎** (6781) |
+| **int4-fr**   | 18,675 | 351.5 | 0.5000 | 0.8040 | **0.6271** (7545) |
+
+Supporting MMLU-800 (per-channel, 512-tok percentile, full-range S0): base 0.8612 · int8-fr 0.8538 ·
+fp8 0.8588 · int4-fr 0.8300.
+
+### 13.4 Findings & recommendation
+
+- **INT8-fr ≈ FP16 and is the recommended candidate.** MMLU-Pro 0.6828 vs 0.6841 (−0.13 pt, noise);
+  GPQA/MATH/MMLU-800 all within noise. Half the KV-cache memory, fully stable (no runtime issues),
+  decode ~352 tps.
+- **FP8 is near-lossless *with cuda graph on*** (GPQA 0.5404, MATH 0.8680, MMLU-800 0.8588 all ≈ base)
+  **but the FP8 KV path is not production-ready** — see the ⚠︎ MMLU-Pro number and §13.5.
+- **INT4-fr has a real reasoning hit**: MMLU-Pro −5.7 pt (0.6271), MATH −7.0 pt (0.8040), GPQA −4.6 pt
+  — larger than the ~3-pt drop on plain MMLU. The coarse 4-bit grid costs more on hard reasoning, even
+  at a quarter of the KV memory. Full-range `[-8,7]` is mandatory (without it, 0.7788).
+- **Throughput/size**: all quantized variants have ~equal or slightly higher prefill than FP16 and
+  ~350 tps decode (vs FP16 424 — dequant overhead); on-disk size is identical.
+
+### 13.5 Work items / hand-off
+
+- **[OPEN] FP8 KV cache is cuda-graph-dependent and unstable — blocks FP8 promotion.**
+  Two distinct symptoms on `rc7_v2_fp8_kv_percentile` during long-generation MMLU-Pro:
+  1. **`enable_cuda_graph=1` → intermittent `Bus error` (SIGBUS, core dumped, exit 135/139)** in the
+     genai runtime mid-eval (all 8 shards hit it near the same point). *Not* resource exhaustion
+     (`/tmp` 8 %, shm 1 %, 1.7 TB RAM free). The par-eval harness's checkpoint/resume then enters a
+     **non-converging retry loop** (two partial resume files `resume_from_250` / `resume_from_1254`
+     never merge → shard relaunches indefinitely). base/int8/int4 completed the full 12,032 cleanly
+     with cuda graph on — **only FP8 crashes**, pointing at the FP8 KV path + graph-capture/shape-
+     massaging interaction (crash log: "This model has shape massaging nodes that will execute on CPU
+     … graph capture feature … use with caution").
+  2. **`enable_cuda_graph=0` (crash workaround) → runs stably but accuracy is uniformly ~11 pt low.**
+     MMLU-Pro 0.5636 with cuda-graph off, uniform across all 8 shards (per-shard 0.556–0.585, valid
+     non-empty completions, only 8 error-ish log lines) — vs FP8's near-lossless GPQA/MATH/MMLU-800
+     which were all measured with cuda-graph **on**. So the 0.5636 is **not a valid accuracy number**;
+     it indicates the FP8 KV path produces **degraded outputs without cuda graph**.
+  **Net:** FP8 KV appears numerically correct only in the cuda-graph-on path, which crashes on long
+  sequences → we currently have **no reliable full MMLU-Pro for FP8**. Action: debug the FP8 GQA KV
+  quant/dequant + RoPE-append kernels for (a) the SIGBUS under graph capture and (b) the cuda-graph-off
+  correctness gap; then re-run FP8 MMLU-Pro with `enable_cuda_graph=1`. Until fixed, prefer **INT8-fr**.
+  Repro: `MODEL_DIR=~/gpt_oss_rc_models/rc7_v2_fp8_kv_percentile RUN_DIR=/tmp/gpt_oss_rc1_runs/v2_fp8
+  REQUIRE_IDLE_GPU=0 EVAL_GPUS="0..7" MMLU_PRO_MAX_SAMPLES=0 [GENAI_ENABLE_CUDA_GRAPH=0]
+  run_gpt_oss_rc1_v2.sh --mmlu-pro`.
+- **[RESOLVED 2026-07-12] Hardened the par-eval resume/merge** (`dev/scripts/h200_18/run_evals_parallel.sh`):
+  root cause was that `oaieval`'s `LocalRecorder` opens the record file in `"wb"` (truncate) mode, so
+  every resume attempt overwrote the prior partial record. Combined with a `continue`-on-success in the
+  retry loop that never advanced the attempt counter, an incomplete shard could spin forever. Fix:
+  (1) each attempt now writes to a private scratch record and a new `merge_records` helper folds its
+  `match` rows onto the accumulated canonical record via a temp-file rename (ordered append — sample_id
+  restarts at 0 per run, so dedup-by-id would be wrong), making `complete` monotonic; (2) the retry loop
+  now always increments `attempt` (hard cap = `--retries + 1` rounds) and breaks early when a full round
+  grades nothing new (poison-sample guard). Verified: merge preserves progress across crashes, and the
+  loop terminates in the converging / poison / slow cases.
+
+---
+
+## 14. Leaderboard evals (MMLU-Pro / GPQA-diamond / MATH-500) for v2 prepack RCs (2026-07-12)
+
+Full leaderboard-style accuracy for the three headline models from §12 (v2 prepack + block-size
+sweep): **rc4** (best MMLU), **rc6** (balanced, int4 lm_head), **rc7** (k_quant body). Complements the
+plain-MMLU numbers in §12 with the harder MMLU-Pro (10-choice) plus reasoning-heavy GPQA-diamond and
+free-form MATH-500.
+
+### Stack / method
+- **Models** (pre-built, no rebuild): `~/gpt_oss_rc_models/v2_rc{4,6,7}`. **ORT** 1.29
+  `~/git/onnxruntime/build/cu130_bench/Release`, **onnxruntime-genai** 0.15.0-dev, **venv**
+  `~/git/onnxruntime/.venv_cu130`, 8×H200 (sm_90), CUDA 13.0.
+- **Runner**: `~/git/dev/scripts/h200_18/run_gpt_oss_rc1_v2.sh --mmlu-pro --gpqa --math`, sharded
+  8-way (`run_evals_parallel.sh`, GPUs 0–7). `enable_cuda_graph=1`, `strict_mode=0`, `ORT_ENABLE_XQA=1`.
+- **Sample sets** (full, `*_MAX_SAMPLES=0`): MMLU-Pro **12,032** (`match_mmlu_pro`,
+  `oss/gpt-oss-20b-mcq10`, A–J, `max_new_tokens=4096`); GPQA-diamond **198** (`match_gpqa_diamond`,
+  `oss/gpt-oss-20b`); MATH-500 **500** (`math_500`, `oss/gpt-oss-20b-math`, symbolic `MathMatch`).
+
+### Results
+
+| rc  | recipe (`cuda/…`)                              | §12 MMLU | Size    | Decode | MMLU-Pro           | GPQA-diamond   | MATH-500       |
+|-----|------------------------------------------------|---------:|--------:|-------:|--------------------|----------------|----------------|
+| rc4 | `gpt-oss-20b_v2_rc4_default_prepack1_bs64.json`     | 0.8211 | 12.4 GB | 420.8 | **0.6973** (8390/12032) | **0.5909** (117/198) | **0.8940** (447/500) |
+| rc6 | `gpt-oss-20b_v2_rc6_default_prepack1_bs64_lm4.json` | 0.8190 | 12.1 GB | 431.2 | 0.6970 (8386/12032) | 0.5657 (112/198) | 0.8920 (446/500) |
+| rc7 | `gpt-oss-20b_v2_rc7_kquant_prepack0_bs64.json`      | 0.8210 | 12.4 GB | 387.3 | 0.6969 (8385/12032) | 0.5303 (105/198) | 0.8500 (425/500) |
+
+### Observations
+- **MMLU-Pro is a dead heat** (0.6973 / 0.6970 / 0.6969 — within 5 questions across 12,032). The §12
+  MMLU separation (rc4 0.8211 vs rc6 0.8190) does not show up on the harder 10-choice set; all three
+  land at ~0.697, ~12 pts below their plain-MMLU scores (expected — MMLU-Pro is deliberately harder).
+- **rc4 leads GPQA + MATH**: GPQA-diamond 0.5909 vs rc6 0.5657 vs rc7 0.5303, and MATH-500 0.8940 vs
+  0.8920 vs 0.8500. GPQA/MATH (198/500 samples) are noisier than MMLU-Pro, but the ordering is
+  consistent with §12: **rc4 ≥ rc6 > rc7**.
+- **rc7 (k_quant body) is the weakest across the board** — GPQA −6 pts, MATH −4.4 pts vs rc4 — echoing
+  §12.2's "k_quant body does not stack on QMoE bs64" (no accuracy gain) while it also has the slowest
+  decode and can't be prepacked. **rc4 dominates rc7.**
+- **rc4 vs rc6**: rc6 trades ~2.5 pts GPQA and ~0.2 pt MATH for +2.5% decode (431 vs 421) and −0.3 GB;
+  MMLU-Pro/MATH are effectively tied. rc4 remains the accuracy pick, rc6 the balanced pick — same
+  verdict as §12.
+- Grading note: the `401 Incorrect API key: dummy` lines in the shard logs are benign (evals registry
+  builds an `OpenAI()` client at import); all grading is the in-process `ort_genai` completion fn.
+
+Artifacts: `/tmp/gpt_oss_rc1_runs/v2_rc{4,6,7}_leaderboard/{scores,mmlu_pro,gpqa,math}.summary` and
+per-eval `…_eval/summary_report.md`. Repro:
+`MODEL_DIR=~/gpt_oss_rc_models/v2_rc4 RUN_DIR=/tmp/gpt_oss_rc1_runs/v2_rc4_leaderboard
+MMLU_PRO_MAX_SAMPLES=0 GPQA_MAX_SAMPLES=0 MATH_MAX_SAMPLES=0 EVAL_GPUS="0..7" REQUIRE_IDLE_GPU=0
+GENAI_ENABLE_CUDA_GRAPH=1 run_gpt_oss_rc1_v2.sh --mmlu-pro --gpqa --math` (repeat for rc6/rc7).
+
+---
+
+## 15. INT8 per-channel KV cache candidate on v2_rc6 — `v2_rc6_int8_kv` (2026-07-13)
+
+Applies the §13 **INT8 per-channel KV-cache quantization** on top of the **v2_rc6** weights
+(`default_prepack1_bs64_lm4`, the balanced §14 pick — int4 body + int4 lm_head, QMoE bs64,
+prepacked), producing a new candidate **`v2_rc6_int8_kv`**. This differs from §13, whose base was
+`rc7_default_prepack` (k_quant body); here we isolate KV quant against the **v2_rc6** weights so the
+comparison is directly against the §14 leaderboard baseline. Only the KV-cache element type changes
+(`present.*.key/value` → `int8`, `elem_type=3`); the int4 weights are byte-identical
+(`model.onnx.data` = 12,117,786,624 B vs v2_rc6's 12,117,721,088 B — the 64 KB delta is the embedded
+per-channel scale metadata, not weights). On-disk size is 12 GB for both.
+
+Stack: 8×H200 (sm_90), ORT 1.29 (`build/cu130_bench/Release`,
+`USE_FPA_INTB_GEMM/USE_FP8_KV_CACHE/USE_INT4_KV_CACHE=ON`), onnxruntime-genai
+`tlwu/target_logprobs` (built Jul-12, includes the `tlwu/quantized_kv_cache` runtime dispatch —
+no rebuild needed), CUDA 13.0 / cuDNN 9.19, venv `~/git/onnxruntime/.venv_cu130`.
+
+### 15.1 Calibration & build
+
+- **Config** (the §13 best-INT8 recipe): per-channel, `METHOD=percentile PERCENTILE=99.99`,
+  **full signed range `QMAX=128`** (`scale = amax/128`, clamp `[-128,127]`), `TARGET_SEQ=512`,
+  `NUM_SEQS=24`. Scales calibrated from the **v2_rc6** FP16-KV `present.*.key/value` outputs.
+- Calibration clipped **98.2 %** of K channels and **95.2 %** of V channels vs raw amax (percentile
+  tail trim). Scale file: `~/gpt_oss_kv_scales/kv_scales_int8_per_channel_v2_rc6.json`
+  (k range [5.2e-4, 1.314] median 0.0345; v range [0.0135, 0.480] median 0.0685).
+- Generated recipe: `cuda/gpt-oss-20b_v2_rc6_default_prepack1_bs64_lm4_int8_kv_gen.json`
+  (= the v2_rc6 recipe + `kv_cache_quant_type=int8_per_channel` + `kv_cache_scale_file`). Model
+  builder finished in 270 s. Built model: `~/gpt_oss_rc_models/v2_rc6_int8_kv`.
+
+Command (calibrate + build + verify + benchmark):
+
+```bash
+CUDNN_HOME=/home/tianlei/cudnn9.19_cuda13 \
+QUANT=int8 GRAN=per_channel METHOD=percentile PERCENTILE=99.99 TARGET_SEQ=512 NUM_SEQS=24 \
+BASE_RECIPE=~/git/olive-recipes/gpt-oss-20b/cuda/gpt-oss-20b_v2_rc6_default_prepack1_bs64_lm4.json \
+BASELINE_MODEL=~/gpt_oss_rc_models/v2_rc6 \
+SCALE_FILE=~/gpt_oss_kv_scales/kv_scales_int8_per_channel_v2_rc6.json \
+MODEL_DIR=~/gpt_oss_rc_models/v2_rc6_int8_kv \
+RECIPE_OUT=~/git/olive-recipes/gpt-oss-20b/cuda/gpt-oss-20b_v2_rc6_default_prepack1_bs64_lm4_int8_kv_gen.json \
+OLIVE_OUTPUT_DIR=~/git/olive-recipes/gpt-oss-20b/cuda/model_v2_rc6_int8_kv_gen \
+RUN_DIR=/tmp/gpt_oss_rc1_runs/v2_rc6_int8_kv \
+  dev/scripts/h200_18/run_gpt_oss_quantized_kv.sh --calibrate --build-model --verify --benchmark
+```
+
+### 15.2 Results vs baseline
+
+Benchmark: `benchmark_e2e.py`, batch 1 / prompt 512 / gen 128, reps 5 / warmup 2, GPU0,
+`enable_cuda_graph=1`, `ORT_ENABLE_XQA=1` — **both models measured with identical settings** (the
+§14 decode 431.2 was a separate run; the apples-to-apples baseline re-measured here is 429.1).
+Evals: `run_gpt_oss_rc1_v2.sh --mmlu-pro --gpqa --math`, full sets, 8-GPU sharded, cuda graph on.
+
+| model | KV cache | Prefill tps | Decode tps | GPQA-diamond (198) | MATH-500 | **MMLU-Pro (12,032)** |
+|-------|----------|--------:|-------:|-----:|-----:|-----:|
+| **v2_rc6** (baseline) | FP16 | 15,071 | 429.1 | 0.5657 (112) | 0.8920 (446) | **0.6970** (8386) |
+| **v2_rc6_int8_kv**    | INT8 per-ch | 15,359 | 355.9 | 0.6162 (122) | 0.8980 (449) | **0.6994** (8415) |
+| Δ (int8 − base) |  | **+1.9 %** | **−17.1 %** | +0.0505 (+10) | +0.0060 (+3) | **+0.0024 (+29)** |
+
+### 15.3 Findings
+
+- **INT8 per-channel KV is essentially lossless on v2_rc6.** MMLU-Pro +0.24 pt (0.6994 vs 0.6970,
+  +29/12,032 — well within noise), MATH-500 +0.6 pt (both ~0.89), GPQA-diamond +5.05 pt (0.6162 vs
+  0.5657, +10/198 — favorable but 198-sample noise, ±3.5 % 1σ). Every metric is ≥ baseline. This
+  reproduces §13.4's headline (INT8-fr ≈ FP16) now against the stronger v2_rc6 weights.
+- **KV memory halved** (2 → 1 byte/elem in the runtime cache) at **no accuracy cost**. On-disk size
+  is unchanged (12 GB) — KV quant only shrinks the GPU KV cache during inference, not stored weights.
+- **Throughput**: prefill ~equal/slightly higher (+1.9 %); decode drops to 355.9 tps (−17 %) from the
+  int8 dequant-in-the-GQA-kernel overhead — the same ~350-tps decode ceiling all §13 quantized-KV
+  variants hit vs the FP16 baseline. The decode cost buys 2× KV-cache capacity (longer context / more
+  concurrent sequences before OOM), so the trade favours long-context / high-batch serving.
+- **Recommendation: `v2_rc6_int8_kv` is a viable candidate** — accuracy-neutral vs v2_rc6, half the KV
+  memory, fully stable with cuda graph on (unlike the FP8 path in §13.5). Prefer it when KV-cache
+  memory (context length or batch) is the binding constraint; keep FP16 v2_rc6 when raw decode tps
+  is the only objective.
+
+### 15.4 Artifacts & repro
+
+- Model: `~/gpt_oss_rc_models/v2_rc6_int8_kv` · scales:
+  `~/gpt_oss_kv_scales/kv_scales_int8_per_channel_v2_rc6.json` · recipe:
+  `cuda/gpt-oss-20b_v2_rc6_default_prepack1_bs64_lm4_int8_kv_gen.json`.
+- Build/benchmark logs: `/tmp/gpt_oss_rc1_runs/v2_rc6_int8_kv/` (baseline bench:
+  `/tmp/gpt_oss_rc1_runs/v2_rc6_baseline_bench/benchmark.summary`).
+- Eval logs/scores: `/tmp/gpt_oss_rc1_runs/v2_rc6_int8_kv_leaderboard/{scores,mmlu_pro,gpqa,math}.summary`.
+- Eval repro:
+
+```bash
+CUDNN_HOME=/home/tianlei/cudnn9.19_cuda13 \
+RECIPE=~/git/olive-recipes/gpt-oss-20b/cuda/gpt-oss-20b_v2_rc6_default_prepack1_bs64_lm4_int8_kv_gen.json \
+MODEL_DIR=~/gpt_oss_rc_models/v2_rc6_int8_kv \
+RUN_DIR=/tmp/gpt_oss_rc1_runs/v2_rc6_int8_kv_leaderboard \
+MMLU_PRO_MAX_SAMPLES=0 GPQA_MAX_SAMPLES=0 MATH_MAX_SAMPLES=0 EVAL_GPUS="0..7" REQUIRE_IDLE_GPU=0 \
+GENAI_ENABLE_CUDA_GRAPH=1 CLEAN_OLIVE=0 \
+  dev/scripts/h200_18/run_gpt_oss_rc1_v2.sh --prepare-data --mmlu-pro --gpqa --math
+```
