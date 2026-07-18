@@ -20,13 +20,20 @@
             "precision": "int4",
             "int4_block_size": 128,
             "int4_algo_config": "rtn_last",
+            "include_hidden_states": true,
+            "exclude_embeds": false,
+            "enable_cuda_graph": true,
             "extra_options": {
                 "moe_quant_type": "nvfp4",
+                "enable_mtp": true,
+                "mtp_head_quant_type": "int8",
+                "mtp_emit_hidden": true,
+                "emit_recurrent_state_all": true,
                 "filename": "text.onnx"
             }
         }
     },
     "target": "local_system",
     "no_artifacts": true,
-    "output_dir": "cuda/models/text.onnx"
+    "output_dir": "cuda/models/mtp"
 }
