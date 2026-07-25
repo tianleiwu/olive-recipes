@@ -149,6 +149,31 @@ def _bits_key(quant_type: str) -> str:
     raise ValueError(f"Unsupported kv_cache quant_type '{quant_type}' (expect int8/int4/fp8 prefix).")
 
 
+def _pair_envelope(x: np.ndarray, num_kv_heads: int, head_size: int) -> np.ndarray:
+    """Map post-RoPE K to its rotation-invariant per-pair envelope.
+
+    RoPE rotates the channel pair ``(d, d + head_size/2)`` of each head as a 2-vector:
+
+        k'_d(p)        =  k_d cos(theta_p) - k_{d+h} sin(theta_p)
+        k'_{d+h}(p)    =  k_d sin(theta_p) + k_{d+h} cos(theta_p)
+
+    A rotation preserves the pair norm, so ``||(k'_d, k'_{d+h})||`` does NOT depend on the
+    position ``p`` and it upper-bounds ``|k'_d(p)|`` at *every* position. Calibrating the
+    threshold on that norm therefore covers positions far beyond the calibration window.
+
+    This matters because the low-frequency RoPE dims barely rotate inside a short calibration
+    window (at 512 tokens the dims with periods >100k tokens sit at theta ~ 0, so only ``k_d``
+    itself is observed), yet reach theta = O(1) rad during a long reasoning generation, at which
+    point they pick up the partner component ``k_{d+h}`` that calibration never saw.
+
+    Returns an array shaped like ``x`` where both channels of every pair hold the pair norm.
+    """
+    half = head_size // 2
+    pairs = x.reshape(x.shape[0], num_kv_heads, head_size)
+    norm = np.sqrt(pairs[:, :, :half].astype(np.float32) ** 2 + pairs[:, :, half:].astype(np.float32) ** 2)
+    return np.concatenate([norm, norm], axis=-1).reshape(x.shape[0], -1)
+
+
 def _tokenize_corpus(tokenizer, num_seqs: int, target_seq: int) -> list[np.ndarray]:
     """Build ``num_seqs`` calibration sequences of length ``target_seq`` tokens.
 
@@ -181,8 +206,16 @@ def calibrate_kv_scales(
     num_layers: int | None = None,
     num_kv_heads: int = 8,
     head_size: int = 64,
+    k_rotary_envelope: bool = True,
 ) -> str:
     """Run the FP16-KV baseline and write calibrated symmetric KV scales to ``out_json``.
+
+    ``k_rotary_envelope`` calibrates the K threshold on the rotation-invariant pair norm
+    (see :func:`_pair_envelope`) instead of the raw post-RoPE values. Without it, the K scales
+    are only valid for positions inside the calibration window: measured on gpt-oss-20b, the
+    worst channel overshoots its 512-token threshold by 25x at position 32k and the K
+    quantization RMS error grows 18x (0.51% -> 9.32%), which shows up as a large accuracy loss
+    on long chain-of-thought workloads. V is never rotated, so it always uses raw values.
 
     Returns the path to the written scale file.
     """
@@ -255,6 +288,8 @@ def calibrate_kv_scales(
             v = outputs[num_layers + i].astype(np.float32).reshape(num_kv_heads, seq_len, head_size)
             k = np.transpose(k, (1, 0, 2)).reshape(seq_len, channels)
             v = np.transpose(v, (1, 0, 2)).reshape(seq_len, channels)
+            if k_rotary_envelope:
+                k = _pair_envelope(k, num_kv_heads, head_size)
             k_amax[i] = np.maximum(k_amax[i], np.abs(k).max(axis=0))
             v_amax[i] = np.maximum(v_amax[i], np.abs(v).max(axis=0))
             if need_samples:
@@ -292,10 +327,12 @@ def calibrate_kv_scales(
     # qneg is only meaningful when reproducing quant/dequant; keep referenced for clarity.
     del qneg, qpos
     logger.info(
-        "Wrote %s (quant=%s, per_channel=%s). k clipped=%.3f v clipped=%.3f k_scale[%.6f,%.6f] v_scale[%.6f,%.6f]",
+        "Wrote %s (quant=%s, per_channel=%s, k_rotary_envelope=%s). "
+        "k clipped=%.3f v clipped=%.3f k_scale[%.6f,%.6f] v_scale[%.6f,%.6f]",
         out_json,
         quant_type,
         per_channel,
+        k_rotary_envelope,
         k_clip,
         v_clip,
         float(k_scales.min()),
@@ -375,6 +412,14 @@ if _OLIVE_AVAILABLE:
                 ),
                 "num_kv_heads": PassConfigParam(type_=int, default_value=8, description="KV heads."),
                 "head_size": PassConfigParam(type_=int, default_value=64, description="Attention head size."),
+                "k_rotary_envelope": PassConfigParam(
+                    type_=bool,
+                    default_value=True,
+                    description=(
+                        "Calibrate K on the rotation-invariant RoPE pair norm so the scales stay "
+                        "valid far beyond the calibration window (required for long-CoT accuracy)."
+                    ),
+                ),
             }
 
         def _run_for_config(
@@ -392,6 +437,7 @@ if _OLIVE_AVAILABLE:
                 num_layers=config.num_layers,
                 num_kv_heads=config.num_kv_heads,
                 head_size=config.head_size,
+                k_rotary_envelope=config.k_rotary_envelope,
             )
             return HfModelHandler(model_path=config.hf_model_path, load_kwargs=config.hf_load_kwargs)
 
@@ -412,6 +458,12 @@ def _main() -> None:
     p.add_argument("--num-layers", type=int, default=None)
     p.add_argument("--num-kv-heads", type=int, default=8)
     p.add_argument("--head-size", type=int, default=64)
+    p.add_argument(
+        "--no-k-rotary-envelope",
+        dest="k_rotary_envelope",
+        action="store_false",
+        help="Calibrate K on raw post-RoPE values (legacy; only valid near the calibration length).",
+    )
     args = p.parse_args()
 
     model_path = args.model
@@ -429,6 +481,7 @@ def _main() -> None:
         num_layers=args.num_layers,
         num_kv_heads=args.num_kv_heads,
         head_size=args.head_size,
+        k_rotary_envelope=args.k_rotary_envelope,
     )
 
 

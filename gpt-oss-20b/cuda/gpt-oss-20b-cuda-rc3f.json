@@ -1,0 +1,79 @@
+{
+    "input_model": {
+        "type": "HfModel",
+        "model_path": "openai/gpt-oss-20b",
+        "load_kwargs": {
+            "torch_dtype": "float16"
+        }
+    },
+    "systems": {
+        "local_system": {
+            "type": "LocalSystem",
+            "accelerators": [
+                {
+                    "device": "gpu",
+                    "execution_providers": [
+                        "CUDAExecutionProvider"
+                    ]
+                }
+            ]
+        }
+    },
+    "passes": {
+        "builder_rc1": {
+            "type": "ModelBuilder",
+            "precision": "int4",
+            "int4_algo_config": "default",
+            "int4_op_types_to_quantize": [
+                "MatMul"
+            ],
+            "extra_options": {
+                "int4_block_size": 32,
+                "fuse_qk_norm_gqa": 1,
+                "last_matmul_weight_int8": 0,
+                "int8_mixed_layers": 1,
+                "moe_quant_type": "mxfp4",
+                "matmulnbits_weights_prepacked": 0
+            }
+        },
+        "kv_calibration": {
+            "type": "KvCacheScaleCalibration",
+            "hf_model_path": "openai/gpt-oss-20b",
+            "hf_load_kwargs": {
+                "torch_dtype": "float16"
+            },
+            "scale_output_path": "kv_scales_rc3f_fp8_per_channel.json",
+            "quant_type": "fp8_per_channel",
+            "method": "percentile",
+            "percentile": 99.99,
+            "target_seq": 512,
+            "num_seqs": 24,
+            "num_kv_heads": 8,
+            "head_size": 64,
+            "k_rotary_envelope": true
+        },
+        "builder_rc3": {
+            "type": "ModelBuilder",
+            "precision": "int4",
+            "int4_algo_config": "default",
+            "int4_op_types_to_quantize": [
+                "MatMul"
+            ],
+            "extra_options": {
+                "int4_block_size": 32,
+                "fuse_qk_norm_gqa": 1,
+                "last_matmul_weight_int8": 0,
+                "int8_mixed_layers": 1,
+                "moe_quant_type": "mxfp4",
+                "matmulnbits_weights_prepacked": 1,
+                "kv_cache_quant_type": "fp8_per_channel",
+                "kv_cache_scale_file": "kv_scales_rc3f_fp8_per_channel.json"
+            }
+        }
+    },
+    "target": "local_system",
+    "log_severity_level": 0,
+    "output_dir": "model_rc3f",
+    "cache_dir": "cache",
+    "no_artifacts": true
+}
