@@ -1,0 +1,131 @@
+{
+    "input_model": {
+        "type": "HfModel",
+        "model_path": "openai/gpt-oss-20b",
+        "load_kwargs": {
+            "torch_dtype": "float16"
+        }
+    },
+    "systems": {
+        "local_system": {
+            "type": "LocalSystem",
+            "accelerators": [
+                {
+                    "device": "gpu",
+                    "execution_providers": [
+                        "CUDAExecutionProvider"
+                    ]
+                }
+            ]
+        }
+    },
+    "passes": {
+        "builder_rc12f_warmup": {
+            "type": "ModelBuilder",
+            "precision": "int4",
+            "int4_algo_config": "default",
+            "int4_op_types_to_quantize": [
+                "MatMul"
+            ],
+            "extra_options": {
+                "int4_block_size": 32,
+                "fuse_qk_norm_gqa": 1,
+                "moe_quant_type": "int4",
+                "matmulnbits_weights_prepacked": 0,
+                "matmul_mixed_precision": "last_matmul:int8,mixed_layers:int8",
+                "nodes_to_exclude": [
+                    "/model/layers.0/moe/router/MatMul",
+                    "/model/layers.1/moe/router/MatMul",
+                    "/model/layers.2/moe/router/MatMul",
+                    "/model/layers.3/moe/router/MatMul",
+                    "/model/layers.4/moe/router/MatMul",
+                    "/model/layers.5/moe/router/MatMul",
+                    "/model/layers.6/moe/router/MatMul",
+                    "/model/layers.7/moe/router/MatMul",
+                    "/model/layers.8/moe/router/MatMul",
+                    "/model/layers.9/moe/router/MatMul",
+                    "/model/layers.10/moe/router/MatMul",
+                    "/model/layers.11/moe/router/MatMul",
+                    "/model/layers.12/moe/router/MatMul",
+                    "/model/layers.13/moe/router/MatMul",
+                    "/model/layers.14/moe/router/MatMul",
+                    "/model/layers.15/moe/router/MatMul",
+                    "/model/layers.16/moe/router/MatMul",
+                    "/model/layers.17/moe/router/MatMul",
+                    "/model/layers.18/moe/router/MatMul",
+                    "/model/layers.19/moe/router/MatMul",
+                    "/model/layers.20/moe/router/MatMul",
+                    "/model/layers.21/moe/router/MatMul",
+                    "/model/layers.22/moe/router/MatMul",
+                    "/model/layers.23/moe/router/MatMul"
+                ],
+                "qmoe_block_size": 64
+            }
+        },
+        "kv_calibration": {
+            "type": "KvCacheScaleCalibration",
+            "hf_model_path": "openai/gpt-oss-20b",
+            "hf_load_kwargs": {
+                "torch_dtype": "float16"
+            },
+            "scale_output_path": "kv_scales_rc12f_fp8_per_tensor.json",
+            "quant_type": "fp8_per_tensor",
+            "method": "percentile",
+            "percentile": 99.99,
+            "target_seq": 512,
+            "num_seqs": 24,
+            "num_kv_heads": 8,
+            "head_size": 64,
+            "k_rotary_envelope": true
+        },
+        "builder_rc12f": {
+            "type": "ModelBuilder",
+            "precision": "int4",
+            "int4_algo_config": "default",
+            "int4_op_types_to_quantize": [
+                "MatMul"
+            ],
+            "extra_options": {
+                "int4_block_size": 32,
+                "fuse_qk_norm_gqa": 1,
+                "moe_quant_type": "int4",
+                "matmulnbits_weights_prepacked": 1,
+                "matmul_mixed_precision": "last_matmul:int8,mixed_layers:int8",
+                "nodes_to_exclude": [
+                    "/model/layers.0/moe/router/MatMul",
+                    "/model/layers.1/moe/router/MatMul",
+                    "/model/layers.2/moe/router/MatMul",
+                    "/model/layers.3/moe/router/MatMul",
+                    "/model/layers.4/moe/router/MatMul",
+                    "/model/layers.5/moe/router/MatMul",
+                    "/model/layers.6/moe/router/MatMul",
+                    "/model/layers.7/moe/router/MatMul",
+                    "/model/layers.8/moe/router/MatMul",
+                    "/model/layers.9/moe/router/MatMul",
+                    "/model/layers.10/moe/router/MatMul",
+                    "/model/layers.11/moe/router/MatMul",
+                    "/model/layers.12/moe/router/MatMul",
+                    "/model/layers.13/moe/router/MatMul",
+                    "/model/layers.14/moe/router/MatMul",
+                    "/model/layers.15/moe/router/MatMul",
+                    "/model/layers.16/moe/router/MatMul",
+                    "/model/layers.17/moe/router/MatMul",
+                    "/model/layers.18/moe/router/MatMul",
+                    "/model/layers.19/moe/router/MatMul",
+                    "/model/layers.20/moe/router/MatMul",
+                    "/model/layers.21/moe/router/MatMul",
+                    "/model/layers.22/moe/router/MatMul",
+                    "/model/layers.23/moe/router/MatMul"
+                ],
+                "qmoe_block_size": 64,
+                "kv_cache_quant_type": "fp8_per_tensor",
+                "kv_cache_scale_file": "kv_scales_rc12f_fp8_per_tensor.json"
+            }
+        }
+    },
+    "target": "local_system",
+    "log_severity_level": 0,
+    "output_dir": "model_rc12f",
+    "cache_dir": "cache",
+    "no_artifacts": true
+}
