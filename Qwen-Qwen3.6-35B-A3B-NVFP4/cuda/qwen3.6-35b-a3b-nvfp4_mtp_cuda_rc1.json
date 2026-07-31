@@ -1,0 +1,43 @@
+{
+    "input_model": {
+        "type": "HfModel",
+        "model_path": "nvidia/Qwen3.6-35B-A3B-NVFP4"
+    },
+    "systems": {
+        "local_system": {
+            "type": "LocalSystem",
+            "accelerators": [
+                {
+                    "device": "gpu",
+                    "execution_providers": ["CUDAExecutionProvider"]
+                }
+            ]
+        }
+    },
+    "passes": {
+        "m": {
+            "type": "ModelBuilder",
+            "precision": "int4",
+            "include_hidden_states": true,
+            "exclude_embeds": false,
+            "enable_cuda_graph": true,
+            "extra_options": {
+                "moe_quant_type": "nvfp4",
+                "use_original_nvfp4_weights": true,
+                "use_original_fp8_weights": true,
+                "fp8_attn_static_input_scale": true,
+                "fp8_kv_cache": true,
+                "fp8_linear_attn": true,
+                "enable_mtp": true,
+                "mtp_head_quant_type": "int8",
+                "mtp_emit_hidden": true,
+                "recurrent_state_window": 4,
+                "fuse_linear_attn_gates": true,
+                "filename": "text.onnx"
+            }
+        }
+    },
+    "target": "local_system",
+    "no_artifacts": true,
+    "output_dir": "cuda/models/nvfp4_mtp_rc1"
+}
