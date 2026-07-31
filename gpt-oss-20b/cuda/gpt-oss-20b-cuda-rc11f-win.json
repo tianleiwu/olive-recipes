@@ -60,7 +60,7 @@
                     "/model/layers.23/moe/router/MatMul"
                 ],
                 "qmoe_block_size": 64,
-                "windowed_kv_cache": false
+                "windowed_kv_cache": true
             }
         },
         "kv_calibration": {
@@ -121,13 +121,13 @@
                 "qmoe_block_size": 64,
                 "kv_cache_quant_type": "int8_per_channel",
                 "kv_cache_scale_file": "kv_scales_rc11f_int8_per_channel.json",
-                "windowed_kv_cache": false
+                "windowed_kv_cache": true
             }
         }
     },
     "target": "local_system",
     "log_severity_level": 0,
-    "output_dir": "model_rc11f",
+    "output_dir": "model_rc11f_win",
     "cache_dir": "cache",
     "no_artifacts": true
 }
